@@ -18,19 +18,18 @@ La arquitectura está basada en microservicios. El cliente externo se comunica c
 
 Los principales servicios definidos son:
 
-- Auth Service: autenticación de la organizadora y generación de tokens JWT.
-- Clientes Service: gestión de la información de los clientes.
-- Eventos Service: creación, consulta, confirmación y cancelación de eventos, además de la gestión de fechas.
-- Finanzas Service: gestión de cotizaciones, pagos y balances.
-- Contratos Service: generación y gestión de contratos.
-- Servicios Adicionales Service: administración y asignación de servicios adicionales.
-- Lugares Service: gestión de salones y fincas.
-- Proveedores Service: administración y asignación de proveedores.
-- Logística Service: generación de requerimientos logísticos y control de compras.
-- Notificaciones Service: procesamiento de notificaciones generadas por eventos de negocio.
-- Auditoría Service: registro de las operaciones importantes para mantener la trazabilidad.
+- **Auth Service:** autenticación de la organizadora y generación de tokens JWT.
+- **Clientes Service:** gestión de la información de los clientes.
+- **Eventos Service:** creación, consulta, confirmación y cancelación de eventos, además de la gestión de fechas.
+- **Finanzas Service:** gestión de cotizaciones, pagos, balances y servicios adicionales asociados a los eventos.
+- **Contratos Service:** generación y gestión de contratos y documentos relacionados.
+- **Lugares Service:** gestión de salones, fincas y lugares para los eventos.
+- **Proveedores Service:** administración y asignación de proveedores a los eventos.
+- **Logística Service:** generación de requerimientos logísticos y control de compras.
 
 Cada microservicio mantiene una responsabilidad específica, evitando concentrar toda la lógica del sistema en un único servicio.
+
+Los procesos de notificación y auditoría se manejan mediante consumidores de eventos de Kafka, permitiendo procesar estas operaciones de manera asíncrona sin incorporarlos inicialmente como microservicios principales.
 
 ## Comunicación entre servicios
 
@@ -48,29 +47,43 @@ Para operaciones que generan procesos posteriores e independientes se utiliza Ap
 
 Se definieron inicialmente los siguientes eventos:
 
-- EVENTO_CONFIRMADO
-- PAGO_REGISTRADO
-- SERVICIO_ADICIONAL_AGREGADO
+- `EVENTO_CONFIRMADO`
+- `PAGO_REGISTRADO`
+- `SERVICIO_ADICIONAL_AGREGADO`
 
-Estos eventos son publicados por los servicios responsables de generar el cambio y posteriormente consumidos por otros servicios que necesitan reaccionar ante dicha operación.
+Estos eventos son publicados por los servicios responsables de generar el cambio y posteriormente consumidos por los componentes que necesitan reaccionar ante dicha operación.
 
-Por ejemplo, cuando se confirma un evento, el Eventos Service publica EVENTO_CONFIRMADO. El Logística Service consume este evento para calcular los requerimientos del evento, el Notificaciones Service puede generar el aviso correspondiente y el Auditoría Service registra la operación.
+Por ejemplo, cuando se confirma un evento, el Eventos Service publica `EVENTO_CONFIRMADO`. El Logística Service consume este evento para calcular los requerimientos del evento. Adicionalmente, el componente de Notificaciones puede procesar el evento para generar el aviso correspondiente y el componente de Auditoría puede registrar la operación.
 
-De esta manera, Kafka no se utiliza únicamente como mecanismo de comunicación, sino para implementar casos de uso asíncronos reales y desacoplar procesos entre los microservicios.
+De esta manera, Kafka no se utiliza únicamente como mecanismo de comunicación, sino para implementar casos de uso asíncronos reales y desacoplar procesos posteriores de la operación principal.
 
 ## Kafka
 
 Los principales tópicos definidos son:
 
-- eventos.confirmados
-- pagos.registrados
-- servicios-adicionales.agregados
+- `eventos.confirmados`
+- `pagos.registrados`
+- `servicios-adicionales.agregados`
 
-Los productores principales son Eventos Service, Finanzas Service y Servicios Adicionales Service.
+### Productores
 
-Los consumidores principales son Logística Service, Notificaciones Service, Auditoría Service y, dependiendo del evento, Finanzas Service y Eventos Service.
+Los principales productores de eventos son:
 
-Los eventos utilizan como referencia principal el identificador del evento para facilitar la relación y el orden de los mensajes asociados a una misma operación.
+- **Eventos Service:** publica `EVENTO_CONFIRMADO`.
+- **Finanzas Service:** publica `PAGO_REGISTRADO`.
+- **Finanzas Service:** publica `SERVICIO_ADICIONAL_AGREGADO`.
+
+### Consumidores
+
+Los consumidores dependen del tipo de evento recibido. Entre los principales se encuentran:
+
+- **Logística Service:** procesa `EVENTO_CONFIRMADO` para calcular los requerimientos operativos del evento.
+- **Contratos Service:** puede procesar `SERVICIO_ADICIONAL_AGREGADO` para gestionar la información necesaria para el anexo de servicios adicionales.
+- **Notificaciones:** procesa eventos de negocio para generar las notificaciones correspondientes.
+- **Auditoría:** procesa eventos para registrar las operaciones importantes y mantener la trazabilidad.
+- **Eventos Service:** puede consumir `PAGO_REGISTRADO` cuando el registro de un pago requiera una actualización relacionada con el estado del evento.
+
+Los eventos utilizan como referencia principal el identificador del evento para facilitar la asociación de los mensajes con la operación de negocio correspondiente.
 
 ## Decisiones principales de arquitectura
 
@@ -88,33 +101,45 @@ Los microservicios utilizan APIs REST para las operaciones síncronas. Estas API
 
 ### Apache Kafka
 
-Kafka se incorpora para los procesos que pueden ejecutarse de manera asíncrona. Los eventos de negocio permiten que diferentes servicios reaccionen a una operación sin que el servicio que la originó tenga que ejecutar directamente todos los procesos posteriores.
+Kafka se incorpora para los procesos que pueden ejecutarse de manera asíncrona. Los eventos de negocio permiten que diferentes componentes reaccionen a una operación sin que el servicio que la originó tenga que ejecutar directamente todos los procesos posteriores.
 
 ### Separación de responsabilidades
 
-Cada microservicio administra un dominio específico. Por ejemplo, Finanzas se encarga de cotizaciones y pagos, mientras que Logística se encarga de requerimientos operativos. Esto evita que un único servicio concentre todas las responsabilidades.
+Cada microservicio administra un dominio específico. Por ejemplo, Finanzas se encarga de cotizaciones, pagos y servicios adicionales, mientras que Logística se encarga de los requerimientos operativos.
 
-### Bases de datos
+Esta separación permite distribuir las responsabilidades del sistema y evita concentrar toda la lógica de negocio en un único servicio.
 
-Cada dominio mantiene la información relacionada con su propia responsabilidad, evitando una dependencia directa de todos los microservicios sobre una única base de datos.
+### Base de datos
+
+El proyecto utiliza una única base de datos PostgreSQL compartida para la persistencia de la información.
+
+Aunque la persistencia se encuentra centralizada, cada microservicio mantiene la responsabilidad lógica sobre las entidades y operaciones correspondientes a su dominio.
+
+Esta decisión permite mantener el modelo de datos relacional y sus relaciones de integridad, de acuerdo con el modelo inicial definido para el proyecto, mientras se conserva la separación de responsabilidades entre los microservicios.
 
 ## Flujo asíncrono principal
 
 Uno de los principales casos de uso asíncronos corresponde a la confirmación de un evento.
 
-La organizadora confirma una reserva mediante el sistema. El Eventos Service valida las condiciones correspondientes, actualiza el evento a estado RESERVADO y la fecha a estado OCUPADA. Después de completar la operación, publica el evento EVENTO_CONFIRMADO en Kafka.
+La organizadora confirma una reserva mediante el sistema. El Eventos Service valida las condiciones correspondientes, actualiza el evento a estado `RESERVADO` y la fecha a estado `OCUPADA`.
 
-El Logística Service consume este evento y aplica las reglas de negocio para calcular los requerimientos necesarios, como meseros, personal de cocina, transporte e insumos.
+Una vez completada correctamente la operación, el Eventos Service publica el evento `EVENTO_CONFIRMADO` en el tópico `eventos.confirmados` de Kafka.
 
-Al mismo tiempo, el Notificaciones Service puede procesar el evento para generar una notificación de confirmación y el Auditoría Service puede registrar la operación.
+El evento contiene información necesaria para identificar la operación, como el identificador del evento, el cliente, la fecha y el tipo de evento.
 
-Este flujo permite que los procesos posteriores se ejecuten de manera independiente y no bloqueen la operación principal.
+Posteriormente, los consumidores procesan el evento de forma independiente. El Logística Service consume el evento y aplica las reglas de negocio para calcular los requerimientos necesarios, como cantidad de meseros, personal de cocina y transporte.
+
+Al mismo tiempo, el componente de Notificaciones puede procesar el evento para generar una notificación de confirmación, mientras que el componente de Auditoría registra la operación para mantener la trazabilidad del sistema.
+
+Estos procesos se ejecutan de forma asíncrona y no necesitan bloquear la operación principal de confirmación.
+
+De manera similar, el registro de un pago y la incorporación de un servicio adicional pueden generar eventos que serán procesados posteriormente por los componentes correspondientes.
 
 ## Estado inicial del proyecto
 
 Actualmente el repositorio contiene la definición inicial de la arquitectura, las decisiones principales y los contratos de comunicación entre los servicios.
 
-La implementación de los microservicios, las APIs REST, los consumidores y productores de Kafka se desarrollará progresivamente durante las siguientes etapas del proyecto.
+La implementación de los microservicios, las APIs REST, los productores y consumidores de Kafka y los demás componentes de la arquitectura se desarrollará progresivamente durante las siguientes etapas del proyecto.
 
 ## Tecnologías principales
 
@@ -123,8 +148,9 @@ La implementación de los microservicios, las APIs REST, los consumidores y prod
 - APIs REST
 - OpenAPI
 - Apache Kafka
+- PostgreSQL
 - JWT
-- Bases de datos independientes por dominio
+- Docker Compose
 
 ## Organización del repositorio
 
@@ -133,6 +159,7 @@ La estructura del repositorio se irá completando a medida que avance la impleme
 - Documentación
 - Contratos OpenAPI
 - Microservicios
+- Configuración de infraestructura
 - Configuración de Kafka
 - Diagramas de arquitectura
 - Pruebas
