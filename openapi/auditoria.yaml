@@ -1,0 +1,311 @@
+openapi: 3.0.3
+info:
+  title: Maxi Eventos - Auditoría Service
+  description: >-
+    Registro de auditoría de los mensajes Kafka. El servicio consume los tres tópicos (eventos.confirmados,
+    pagos.registrados y servicios-adicionales.agregados) con el consumer group auditoria-group y guarda cada mensaje
+    válido en auditoria_eventos con su JSON original. No tiene operaciones de escritura por REST.
+    Los mensajes inválidos no se auditan: van al DLT <tópico>.DLT (ver docs/kafka.md).
+  version: 1.2.0
+servers:
+  - url: http://localhost:8087/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /auditoria:
+    get:
+      operationId: listarAuditoria
+      summary: Listar los mensajes Kafka auditados
+      description: >-
+        Filtros opcionales por eventoId y tipo. Campos para sort: fechaRecepcion, fechaOcurrencia, tipo (por defecto
+        fechaRecepcion,desc). payload es el sobre tal como llegó del tópico.
+      parameters:
+        - name: eventoId
+          in: query
+          required: false
+          description: Evento de negocio al que se refieren los mensajes.
+          schema:
+            type: string
+            format: uuid
+            example: af79495b-9065-4b83-b08e-83ca7edabc5a
+        - name: tipo
+          in: query
+          required: false
+          description: Tipo de mensaje; otro valor responde 400.
+          schema:
+            $ref: '#/components/schemas/TipoMensaje'
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+        - $ref: '#/components/parameters/sort'
+      responses:
+        '200':
+          description: Página de registros de auditoría
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginaAuditoriaEvento'
+              example:
+                contenido:
+                  - idEvento: 1cd59410-e5ff-4cfb-bd15-c9f06d31a607
+                    tipo: EVENTO_CONFIRMADO
+                    eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                    servicioOrigen: eventos-service
+                    payload:
+                      idEvento: 1cd59410-e5ff-4cfb-bd15-c9f06d31a607
+                      tipo: EVENTO_CONFIRMADO
+                      version: 1
+                      fechaOcurrencia: '2026-10-30T23:59:39.333467703Z'
+                      servicioOrigen: eventos-service
+                      eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                      datos:
+                        eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                        nombreEvento: Quince años de Lucía
+                        tipoEvento: QUINCE_ANOS
+                        fecha: '2026-12-05'
+                        clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                        lugarId: 246c1c43-72c7-4d34-bafe-6beb822562e3
+                        cantidadAdultos: 90
+                        cantidadNinos: 15
+                        numInvitados: 105
+                        zona: NEIVA
+                    topico: eventos.confirmados
+                    particion: 0
+                    offset: 0
+                    fechaOcurrencia: '2026-10-30T23:59:39.333468Z'
+                    fechaRecepcion: '2026-10-30T23:59:40.378012Z'
+                  - idEvento: 09d47d63-ffc8-436a-84d8-7c51e58a0698
+                    tipo: PAGO_REGISTRADO
+                    eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                    servicioOrigen: finanzas-service
+                    payload:
+                      idEvento: 09d47d63-ffc8-436a-84d8-7c51e58a0698
+                      tipo: PAGO_REGISTRADO
+                      version: 1
+                      fechaOcurrencia: '2026-10-30T23:59:38.858391570Z'
+                      servicioOrigen: finanzas-service
+                      eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                      datos:
+                        pagoId: 438df9f8-1240-452d-bc4c-966003c8db15
+                        eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                        clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                        monto: 1044000.0
+                        moneda: COP
+                        metodoPago: TRANSFERENCIA
+                        claveIdempotencia: afed9d5e-3124-46b4-a0d1-2c95cf17198c
+                        fechaPago: '2026-10-30T23:59:38.853016647Z'
+                    topico: pagos.registrados
+                    particion: 0
+                    offset: 0
+                    fechaOcurrencia: '2026-10-30T23:59:38.858392Z'
+                    fechaRecepcion: '2026-10-30T23:59:40.378032Z'
+                pagina: 0
+                tamanoPagina: 2
+                totalElementos: 4
+                totalPaginas: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Forbidden:
+      description: >-
+        Fase 11D: el token es válido pero su rol no permite la operación. La auditoría solo la ve el ADMINISTRADOR; el
+        ASISTENTE (y un token sin claim rol) recibe 403.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-11-04T21:00:00Z'
+            status: 403
+            error: Forbidden
+            message: No tienes permiso para realizar esta operación.
+            path: /api/v1/auditoria
+    BadRequest:
+      description: Parámetro inválido (eventoId no es UUID, tipo desconocido, page/size fuera de rango o sort no permitido)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:55Z'
+            status: 400
+            error: Bad Request
+            message: Los datos enviados no son válidos. Revisa los campos indicados.
+            path: /api/v1/auditoria
+            errores:
+              - campo: tipo
+                mensaje: 'valor no permitido; los valores válidos son: EVENTO_CONFIRMADO, PAGO_REGISTRADO, SERVICIO_ADICIONAL_AGREGADO, EVENTO_PROXIMO'
+    Unauthorized:
+      description: Falta el token, venció o no es válido (firma, emisor o formato). Cuerpo ErrorResponse (Fase 7).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            sinToken:
+              value: {timestamp: '2026-10-28T20:15:00Z', status: 401, error: Unauthorized, message: 'Debes iniciar sesión para realizar esta operación. Envía el header Authorization: Bearer <token>.', path: /api/v1/auditoria}
+            tokenVencido:
+              value: {timestamp: '2026-10-28T20:15:00Z', status: 401, error: Unauthorized, message: El token venció. Inicia sesión de nuevo., path: /api/v1/auditoria}
+            tokenInvalido:
+              value: {timestamp: '2026-10-28T20:15:00Z', status: 401, error: Unauthorized, message: El token no es válido. Inicia sesión de nuevo., path: /api/v1/auditoria}
+    InternalServerError:
+      description: Error interno del servidor (mensaje neutro; el detalle queda solo en el log del servicio)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {timestamp: '2026-10-31T00:11:55Z', status: 500, error: Internal Server Error, message: Ocurrió un error interno. Intenta de nuevo más tarde., path: /api/v1/auditoria}
+  parameters:
+    page:
+      name: page
+      in: query
+      required: false
+      description: Número de página (empieza en 0).
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    size:
+      name: size
+      in: query
+      required: false
+      description: Tamaño de página (máximo 100); fuera de rango responde 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    sort:
+      name: sort
+      in: query
+      required: false
+      description: Ordenamiento campo,asc o campo,desc. Solo se aceptan los campos indicados en cada operación; otro valor responde 400.
+      schema:
+        type: string
+        example: fechaRecepcion,desc
+  schemas:
+    TipoMensaje:
+      type: string
+      description: Fase 11E agrega EVENTO_PROXIMO (tópico eventos.proximos, recordatorios de eventos-service).
+      enum: [EVENTO_CONFIRMADO, PAGO_REGISTRADO, SERVICIO_ADICIONAL_AGREGADO, EVENTO_PROXIMO]
+    AuditoriaEvento:
+      type: object
+      required: [idEvento, tipo, eventoId, payload, topico, particion, offset, fechaRecepcion]
+      properties:
+        idEvento:
+          type: string
+          format: uuid
+          description: Identificador único del mensaje (idempotencia).
+        tipo:
+          $ref: '#/components/schemas/TipoMensaje'
+        eventoId:
+          type: string
+          format: uuid
+        servicioOrigen:
+          type: string
+          example: finanzas-service
+        payload:
+          type: object
+          description: Sobre completo del mensaje (idEvento, tipo, version, fechaOcurrencia, servicioOrigen, eventoId, datos), tal como llegó del tópico.
+          additionalProperties: true
+        topico:
+          type: string
+          example: pagos.registrados
+        particion:
+          type: integer
+          example: 1
+        offset:
+          type: integer
+          format: int64
+          example: 12
+        fechaOcurrencia:
+          type: string
+          format: date-time
+          description: Momento en que ocurrió el hecho (del sobre).
+        fechaRecepcion:
+          type: string
+          format: date-time
+          description: Momento en que auditoria-service recibió el mensaje.
+    PaginaAuditoriaEvento:
+      allOf:
+        - $ref: '#/components/schemas/PaginaBase'
+        - type: object
+          properties:
+            contenido:
+              type: array
+              items:
+                $ref: '#/components/schemas/AuditoriaEvento'
+    PaginaBase:
+      type: object
+      description: Página de resultados (formato propio de la API, igual en todos los listados).
+      required: [contenido, pagina, tamanoPagina, totalElementos, totalPaginas]
+      properties:
+        contenido:
+          type: array
+          items: {}
+        pagina:
+          type: integer
+          description: Número de la página devuelta (empieza en 0).
+          example: 0
+        tamanoPagina:
+          type: integer
+          description: Tamaño de página solicitado.
+          example: 10
+        totalElementos:
+          type: integer
+          format: int64
+          description: Total de elementos que cumplen el filtro.
+          example: 1
+        totalPaginas:
+          type: integer
+          description: Total de páginas.
+          example: 1
+    ErrorResponse:
+      type: object
+      description: Formato único de error en todos los microservicios. errores solo aparece cuando hay detalles por campo.
+      required: [timestamp, status, error, message, path]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-10-28T15:30:00Z'
+        status:
+          type: integer
+          example: 400
+        error:
+          type: string
+          description: Frase estándar del código HTTP.
+          example: Bad Request
+        message:
+          type: string
+          description: Mensaje en español, entendible para la organizadora.
+          example: Los datos enviados no son válidos. Revisa los campos indicados.
+        path:
+          type: string
+          example: /api/v1/auditoria
+        errores:
+          type: array
+          description: Detalle por campo (solo en errores de validación o de formato).
+          items:
+            $ref: '#/components/schemas/ErrorCampo'
+    ErrorCampo:
+      type: object
+      required: [campo, mensaje]
+      properties:
+        campo:
+          type: string
+          example: tipo
+        mensaje:
+          type: string
+          example: 'valor no permitido; los valores válidos son: EVENTO_CONFIRMADO, PAGO_REGISTRADO, SERVICIO_ADICIONAL_AGREGADO, EVENTO_PROXIMO'

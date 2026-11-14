@@ -1,0 +1,71 @@
+server:
+  port: ${SERVER_PORT:8087}
+
+spring:
+  # Mensajes de validación siempre en español, sin depender de la cabecera Accept-Language
+  web:
+    locale: es
+    locale-resolver: fixed
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  application:
+    name: auditoria-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/maxi_eventos}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      # Con la BD caída cada intento del consumidor falla rápido (3 intentos y al DLT), como en Logística
+      connection-timeout: 5000
+      # Pool pequeño: 3 listeners + un GET. Con el valor por defecto (10) los 10 servicios ocupan las 100 conexiones
+      # de PostgreSQL (max_connections) y nadie más puede conectarse (incidencia del primer despliegue de la 5C).
+      maximum-pool-size: 3
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  sql:
+    init:
+      mode: always
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: auditoria-group
+      # Grupo nuevo: al desplegarse por primera vez lee el historial completo de los tres tópicos
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        # Conserva el JSON original del tópico para guardarlo tal cual en auditoria_eventos.payload
+        "[spring.deserializer.value.delegate.class]": com.maxieventos.auditoria.kafka.SobreDeserializer
+        # Fase 11E: refresca los metadatos (particiones nuevas de un tópico) cada 30 s en lugar de cada 5 minutos
+        "[metadata.max.age.ms]": 30000
+    listener:
+      ack-mode: record
+
+logging:
+  # Fase 11C: código de referencia de la petición (X-Request-Id; "-" en los consumidores Kafka y tareas programadas)
+  pattern:
+    correlation: "[ref=%X{ref:--}] "
+  level:
+    org.springframework.kafka: INFO
+
+auth:
+  jwt:
+    secret: ${AUTH_JWT_SECRET}
+    # Emisor que debe traer el token (lo pone auth-service); no es un secreto
+    issuer: maxi-eventos-auth
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized

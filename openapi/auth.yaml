@@ -1,0 +1,162 @@
+openapi: 3.0.3
+info:
+  title: Maxi Eventos - Auth Service
+  version: 1.1.0
+servers:
+  - url: http://localhost:8080/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /auth/login:
+    post:
+      operationId: login
+      summary: Autenticar a un usuario (administrador o asistente) y emitir un JWT
+      description: >-
+        Operación pública (sin token). Fase 11D: los usuarios están en la tabla usuarios, sembrada al arrancar desde el .env
+        (ADMINISTRADOR: AUTH_ORGANIZER_*; ASISTENTE: AUTH_ASISTENTE_*). La contraseña se compara con su hash BCrypt; un
+        correo desconocido, una contraseña incorrecta o un usuario inactivo responden el mismo 401. El token lleva sub = id
+        opaco del usuario, iss, iat, exp y rol (ADMINISTRADOR o ASISTENTE; no es un dato sensible), nunca el correo ni el
+        nombre. Se envía después en el header Authorization: Bearer <token> a todos los servicios y al gateway, que
+        autorizan según el rol (403 / FORBIDDEN; matriz en docs/seguridad.md).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              correo: organizadora@maxieventos.com
+              password: '<contraseña de la organizadora>'
+      responses:
+        '200':
+          description: Login exitoso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+              example:
+                token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIzZjZjMWI5ZS0yZDRhLTRlOGYtYjdhNS05YzBkMWUyZjNhNGIiLCJpc3MiOiJtYXhpLWV2ZW50b3MtYXV0aCJ9.firma-de-ejemplo
+                tipoToken: Bearer
+                expiracionEnSegundos: 28800
+                nombre: Organizadora
+                rol: ADMINISTRADOR
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    BadRequest:
+      description: Solicitud inválida (validación o formato); incluye el detalle por campo en errores
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:53Z'
+            status: 400
+            error: Bad Request
+            message: Los datos enviados no son válidos. Revisa los campos indicados.
+            path: /api/v1/auth/login
+            errores:
+              - campo: password
+                mensaje: no debe estar vacío
+              - campo: correo
+                mensaje: debe ser una dirección de correo electrónico con formato correcto
+    Unauthorized:
+      description: >-
+        Credenciales inválidas. El login es público (no lleva token); el resto de auth-service (actuator info y
+        metrics) exige un JWT válido desde la Fase 7. Cuerpo ErrorResponse.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {timestamp: '2026-10-28T20:15:00Z', status: 401, error: Unauthorized, message: Correo o contraseña incorrectos., path: /api/v1/auth/login}
+    InternalServerError:
+      description: Error interno del servidor (mensaje neutro; el detalle queda solo en el log del servicio)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {timestamp: '2026-10-31T00:11:53Z', status: 500, error: Internal Server Error, message: Ocurrió un error interno. Intenta de nuevo más tarde., path: /api/v1/auth/login}
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Formato único de error en todos los microservicios. errores solo aparece cuando hay detalles por campo.
+      required: [timestamp, status, error, message, path]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-10-27T15:30:00Z'
+        status:
+          type: integer
+          example: 400
+        error:
+          type: string
+          description: Frase estándar del código HTTP.
+          example: Bad Request
+        message:
+          type: string
+          description: Mensaje en español, entendible para la organizadora.
+          example: Los datos enviados no son válidos. Revisa los campos indicados.
+        path:
+          type: string
+          example: /api/v1/recurso
+        errores:
+          type: array
+          description: Detalle por campo (solo en errores de validación o de formato).
+          items:
+            $ref: '#/components/schemas/ErrorCampo'
+    ErrorCampo:
+      type: object
+      required: [campo, mensaje]
+      properties:
+        campo:
+          type: string
+          example: correo
+        mensaje:
+          type: string
+          example: debe ser una dirección de correo electrónico con formato correcto
+    LoginRequest:
+      type: object
+      required: [correo, password]
+      properties:
+        correo:
+          type: string
+          format: email
+          example: organizadora@maxieventos.com
+        password:
+          type: string
+          format: password
+    AuthResponse:
+      type: object
+      required: [token, tipoToken, expiracionEnSegundos, nombre, rol]
+      properties:
+        token:
+          type: string
+          description: Token JWT firmado (claims sub, iss, iat, exp y rol)
+        tipoToken:
+          type: string
+          enum: [Bearer]
+          example: Bearer
+        expiracionEnSegundos:
+          type: integer
+          example: 28800
+        nombre:
+          type: string
+          description: Nombre del usuario para mostrarlo en la interfaz (Fase 11D; NO va en el token)
+          example: Organizadora
+        rol:
+          type: string
+          enum: [ADMINISTRADOR, ASISTENTE]
+          description: Rol del usuario (Fase 11D; también va en el claim rol del token)
+          example: ADMINISTRADOR

@@ -1,0 +1,844 @@
+openapi: 3.0.3
+info:
+  title: Maxi Eventos - Proveedores Service
+  description: >-
+    Catálogo de proveedores (sonido, banquetes, floristería, fotografía…) y su asignación a eventos. Al asignar o listar
+    las asignaciones se valida por REST contra eventos-service (reenviando el mismo token) que el evento exista. Las
+    consultas de proveedores se cachean en Redis; si Redis no responde, se consulta la base de datos. Desde la 1.1.0 una
+    asignación PENDIENTE se puede confirmar (PATCH /proveedores/eventos/asignaciones/{asignacionId}/estado).
+  version: 1.2.0
+servers:
+  - url: http://localhost:8086/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /proveedores:
+    get:
+      operationId: listarProveedores
+      summary: Listar proveedores con paginación y filtros opcionales por categoría y estado
+      description: >-
+        Campos para sort: id, nombre, categoria, contacto, activo (por defecto nombre,asc). Respuesta cacheada en Redis
+        (proveedores-listado, 30 min); se invalida al crear, actualizar, cambiar el estado o eliminar un proveedor.
+      parameters:
+        - name: categoria
+          in: query
+          required: false
+          description: Categoría exacta, sin distinguir mayúsculas.
+          schema:
+            type: string
+            example: SONIDO
+        - name: activo
+          in: query
+          required: false
+          description: true = solo activos, false = solo inactivos; sin el parámetro, todos.
+          schema:
+            type: boolean
+            example: true
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+        - $ref: '#/components/parameters/sort'
+      responses:
+        '200':
+          description: Página de proveedores
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginaProveedor'
+              example:
+                contenido:
+                  - id: 0d137724-90c4-40dd-832b-5fc30b37409f
+                    nombre: Sonido y Luces del Huila
+                    categoria: SONIDO
+                    contacto: '3112223344'
+                    activo: true
+                pagina: 0
+                tamanoPagina: 10
+                totalElementos: 1
+                totalPaginas: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      operationId: crearProveedor
+      summary: Crear un proveedor (queda activo)
+      description: >-
+        El nombre se guarda sin espacios extremos. Si ya existe un proveedor con el mismo nombre (sin distinguir
+        mayúsculas) responde 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProveedorRequest'
+            example:
+              nombre: Banquetes Doña Inés
+              categoria: BANQUETES
+              contacto: '3125556677'
+      responses:
+        '201':
+          description: Proveedor creado
+          headers:
+            Location:
+              description: URL del proveedor creado (/api/v1/proveedores/{id}).
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProveedorResponseDTO'
+              example:
+                id: 48e881f1-aa61-4cb1-99f7-a22fca149c71
+                nombre: Banquetes Doña Inés
+                categoria: BANQUETES
+                contacto: '3125556677'
+                activo: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/ProveedorDuplicado'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /proveedores/{id}:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    get:
+      operationId: obtenerProveedor
+      summary: Obtener un proveedor por UUID
+      description: Respuesta cacheada en Redis (proveedores, 30 min); se actualiza al modificar el proveedor o su estado.
+      responses:
+        '200':
+          description: Proveedor encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProveedorResponseDTO'
+              example:
+                id: 0d137724-90c4-40dd-832b-5fc30b37409f
+                nombre: Sonido y Luces del Huila
+                categoria: SONIDO
+                contacto: '3112223344'
+                activo: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      operationId: actualizarProveedor
+      summary: Actualizar un proveedor
+      description: Si otro proveedor ya tiene ese nombre (sin distinguir mayúsculas) responde 409; conservar el nombre propio es válido.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProveedorRequest'
+            example:
+              nombre: Sonido y Luces del Huila
+              categoria: SONIDO
+              contacto: '3119990000'
+      responses:
+        '200':
+          description: Proveedor actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProveedorResponseDTO'
+              example:
+                id: 0d137724-90c4-40dd-832b-5fc30b37409f
+                nombre: Sonido y Luces del Huila
+                categoria: SONIDO
+                contacto: '3119990000'
+                activo: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/ProveedorDuplicado'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      operationId: eliminarProveedor
+      summary: Eliminar un proveedor sin asignaciones
+      description: >-
+        Solo se elimina un proveedor que nunca fue asignado a un evento. Si tiene asignaciones responde 409; en ese caso
+        se debe inactivar con PATCH /proveedores/{id}/estado.
+      responses:
+        '204':
+          description: Proveedor eliminado (sin cuerpo)
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: El proveedor tiene asignaciones
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 409
+                error: Conflict
+                message: El proveedor Sonido y Luces del Huila tiene asignaciones a eventos y no se puede eliminar. Inactívalo en su lugar.
+                path: /api/v1/proveedores/0d137724-90c4-40dd-832b-5fc30b37409f
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /proveedores/eventos/asignaciones/{asignacionId}/estado:
+    parameters:
+      - name: asignacionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      operationId: cambiarEstadoAsignacion
+      summary: Confirmar una asignación de proveedor a un evento
+      description: >-
+        Solo se permite pasar una asignación de PENDIENTE a CONFIRMADO. Pedir otro estado, o confirmar una asignación que
+        ya no está PENDIENTE, responde 409. No consulta a eventos-service.
+      parameters:
+        - $ref: '#/components/parameters/Authorization'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstadoAsignacionRequest'
+            example:
+              estado: CONFIRMADO
+      responses:
+        '200':
+          description: Asignación confirmada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventoProveedorResponseDTO'
+              example:
+                id: 25a25de3-6dc0-43a3-95d1-cb8e039bc677
+                eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                proveedorId: 0d137724-90c4-40dd-832b-5fc30b37409f
+                servicioAsignado: Sonido e iluminación
+                costoAcordado: 1200000.00
+                estado: CONFIRMADO
+        '400':
+          description: Falta el estado, no es un valor válido o el id no es un UUID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-11-04T15:20:00Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/proveedores/eventos/asignaciones/25a25de3-6dc0-43a3-95d1-cb8e039bc677/estado
+                errores:
+                  - campo: estado
+                    mensaje: no debe ser nulo
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: La asignación no existe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-11-04T15:20:00Z'
+                status: 404
+                error: Not Found
+                message: No existe una asignación con id 11111111-1111-1111-1111-111111111111
+                path: /api/v1/proveedores/eventos/asignaciones/11111111-1111-1111-1111-111111111111/estado
+        '409':
+          description: La asignación ya no está PENDIENTE, o el estado pedido no es CONFIRMADO
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                yaConfirmada:
+                  value:
+                    timestamp: '2026-11-04T15:20:00Z'
+                    status: 409
+                    error: Conflict
+                    message: Solo se puede confirmar una asignación pendiente; esta ya está confirmada.
+                    path: /api/v1/proveedores/eventos/asignaciones/25a25de3-6dc0-43a3-95d1-cb8e039bc677/estado
+                estadoNoPermitido:
+                  value:
+                    timestamp: '2026-11-04T15:20:00Z'
+                    status: 409
+                    error: Conflict
+                    message: Una asignación solo se puede pasar de pendiente a confirmada; se pidió dejarla cancelada.
+                    path: /api/v1/proveedores/eventos/asignaciones/25a25de3-6dc0-43a3-95d1-cb8e039bc677/estado
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /proveedores/{id}/estado:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    patch:
+      operationId: cambiarEstadoProveedor
+      summary: Activar o desactivar un proveedor
+      description: Un proveedor inactivo no se puede asignar a eventos (409).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstadoProveedorRequest'
+            example:
+              activo: false
+      responses:
+        '200':
+          description: Estado actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProveedorResponseDTO'
+              example:
+                id: 6d30cbd6-201a-4100-b686-3dc97de4ed8b
+                nombre: Floristería El Jardín
+                categoria: FLORISTERIA
+                contacto: '3138889900'
+                activo: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /proveedores/eventos/{eventoId}:
+    get:
+      operationId: listarProveedoresPorEvento
+      summary: Listar las asignaciones de proveedores de un evento
+      description: >-
+        Valida contra eventos-service (con el mismo token) que el evento exista: 404 si no existe; página vacía si existe y
+        no tiene asignaciones; 503 si eventos-service no responde. Campos para sort: id, servicioAsignado, costoAcordado,
+        estado (por defecto servicioAsignado,asc). No se cachea.
+      parameters:
+        - $ref: '#/components/parameters/Authorization'
+        - name: eventoId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: af79495b-9065-4b83-b08e-83ca7edabc5a
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+        - $ref: '#/components/parameters/sort'
+      responses:
+        '200':
+          description: Página de asignaciones del evento (vacía si no tiene)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginaEventoProveedor'
+              example:
+                contenido:
+                  - id: 7ffb22b9-98a5-4d77-a129-f63890a7a31d
+                    eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                    proveedorId: 48e881f1-aa61-4cb1-99f7-a22fca149c71
+                    servicioAsignado: Banquete para 105 invitados
+                    costoAcordado: 6300000.00
+                    estado: PENDIENTE
+                  - id: 25a25de3-6dc0-43a3-95d1-cb8e039bc677
+                    eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                    proveedorId: 0d137724-90c4-40dd-832b-5fc30b37409f
+                    servicioAsignado: Sonido e iluminación
+                    costoAcordado: 1200000.00
+                    estado: CONFIRMADO
+                pagina: 0
+                tamanoPagina: 10
+                totalElementos: 2
+                totalPaginas: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: El evento no existe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 404
+                error: Not Found
+                message: No existe un evento con id 11111111-1111-1111-1111-111111111111
+                path: /api/v1/proveedores/eventos/11111111-1111-1111-1111-111111111111
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /proveedores/eventos:
+    post:
+      operationId: asignarProveedorAEvento
+      summary: Asignar un proveedor a un evento
+      description: >-
+        Valida contra eventos-service que el evento exista (404; 503 si no responde). El proveedor debe estar activo y no
+        puede repetirse para el mismo evento y el mismo servicio (409); sí puede asignarse al mismo evento para otro servicio.
+      parameters:
+        - $ref: '#/components/parameters/Authorization'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventoProveedorRequest'
+            example:
+              eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+              proveedorId: 0d137724-90c4-40dd-832b-5fc30b37409f
+              servicioAsignado: Sonido e iluminación
+              costoAcordado: 1200000
+              estado: CONFIRMADO
+      responses:
+        '201':
+          description: Asignación creada
+          headers:
+            Location:
+              description: URL de las asignaciones del evento (/api/v1/proveedores/eventos/{eventoId}).
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventoProveedorResponseDTO'
+              example:
+                id: 25a25de3-6dc0-43a3-95d1-cb8e039bc677
+                eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                proveedorId: 0d137724-90c4-40dd-832b-5fc30b37409f
+                servicioAsignado: Sonido e iluminación
+                costoAcordado: 1200000.00
+                estado: CONFIRMADO
+        '400':
+          description: Datos inválidos (detalle por campo en errores)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/proveedores/eventos
+                errores:
+                  - campo: servicioAsignado
+                    mensaje: no debe estar vacío
+                  - campo: costoAcordado
+                    mensaje: debe ser mayor que 0
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: El evento o el proveedor no existen
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 404
+                error: Not Found
+                message: No existe un evento con id 11111111-1111-1111-1111-111111111111
+                path: /api/v1/proveedores/eventos
+        '409':
+          description: >-
+            El proveedor está inactivo o ya está asignado a este evento para el mismo servicio (mismo eventoId, proveedorId
+            y servicioAsignado). El mismo proveedor sí puede asignarse al evento para otro servicio (201).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                proveedorYaAsignado:
+                  value:
+                    timestamp: '2026-10-31T00:11:55Z'
+                    status: 409
+                    error: Conflict
+                    message: El proveedor «Sonido y Luces del Huila» ya está asignado a este evento para el servicio «Sonido e iluminación»
+                    path: /api/v1/proveedores/eventos
+                proveedorInactivo:
+                  value:
+                    timestamp: '2026-10-31T00:11:55Z'
+                    status: 409
+                    error: Conflict
+                    message: El proveedor está inactivo y no se puede asignar a un evento
+                    path: /api/v1/proveedores/eventos
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Forbidden:
+      description: >-
+        Fase 11D: el token es válido pero su rol no permite la operación. Crear, editar, activar / desactivar y borrar
+        proveedores (el catálogo) es solo del ADMINISTRADOR; el ASISTENTE (y un token sin claim rol) recibe 403. Consultar
+        el catálogo y asignar o confirmar proveedores en un evento lo pueden hacer los dos roles.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-11-04T21:00:00Z'
+            status: 403
+            error: Forbidden
+            message: No tienes permiso para realizar esta operación.
+            path: /api/v1/proveedores
+    BadRequest:
+      description: >-
+        Solicitud inválida: datos del cuerpo, id que no es UUID, filtros o paginación fuera de rango, o ruta sin
+        identificador; incluye el detalle por campo en errores cuando aplica
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            datosInvalidos:
+              value:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/proveedores
+                errores:
+                  - campo: categoria
+                    mensaje: no debe estar vacío
+                  - campo: contacto
+                    mensaje: no debe estar vacío
+                  - campo: nombre
+                    mensaje: no debe estar vacío
+            identificadorInvalido:
+              value:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/proveedores/abc
+                errores:
+                  - campo: id
+                    mensaje: debe ser un identificador válido (UUID)
+            rutaInvalida:
+              value:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 400
+                error: Bad Request
+                message: 'La ruta no es válida: falta un identificador o contiene caracteres no permitidos.'
+                path: /api/v1/proveedores//estado
+    Unauthorized:
+      description: Falta el token, venció o no es válido (firma, emisor o formato). Cuerpo ErrorResponse (Fase 7).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            sinToken:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: 'Debes iniciar sesión para realizar esta operación. Envía el header Authorization: Bearer <token>.', path: /api/v1/proveedores}
+            tokenVencido:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: El token venció. Inicia sesión de nuevo., path: /api/v1/proveedores}
+            tokenInvalido:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: El token no es válido. Inicia sesión de nuevo., path: /api/v1/proveedores}
+    NotFound:
+      description: No existe un proveedor con ese id
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:55Z'
+            status: 404
+            error: Not Found
+            message: No existe un proveedor con id 11111111-1111-1111-1111-111111111111
+            path: /api/v1/proveedores/11111111-1111-1111-1111-111111111111
+    ProveedorDuplicado:
+      description: Ya existe un proveedor con ese nombre (sin distinguir mayúsculas ni espacios extremos)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:55Z'
+            status: 409
+            error: Conflict
+            message: Ya existe un proveedor con el nombre sonido y luces del huila
+            path: /api/v1/proveedores
+    ServiceUnavailable:
+      description: El servicio de eventos no está disponible para validar el evento
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:55Z'
+            status: 503
+            error: Service Unavailable
+            message: El servicio de eventos no está disponible en este momento. Intenta de nuevo más tarde.
+            path: /api/v1/proveedores/eventos
+    InternalServerError:
+      description: Error interno del servidor (mensaje neutro; el detalle queda solo en el log del servicio)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {timestamp: '2026-10-31T00:11:55Z', status: 500, error: Internal Server Error, message: Ocurrió un error interno. Intenta de nuevo más tarde., path: /api/v1/proveedores}
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+        example: 0d137724-90c4-40dd-832b-5fc30b37409f
+    Authorization:
+      name: Authorization
+      in: header
+      required: true
+      description: 'Bearer <token>. Además de autenticar, se reenvía a eventos-service para validar el evento.'
+      schema:
+        type: string
+    page:
+      name: page
+      in: query
+      required: false
+      description: Número de página (empieza en 0).
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    size:
+      name: size
+      in: query
+      required: false
+      description: Tamaño de página (máximo 100); fuera de rango responde 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    sort:
+      name: sort
+      in: query
+      required: false
+      description: Ordenamiento campo,asc o campo,desc. Solo se aceptan los campos indicados en cada operación; otro valor responde 400.
+      schema:
+        type: string
+        example: nombre,asc
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Formato único de error en todos los microservicios. errores solo aparece cuando hay detalles por campo.
+      required: [timestamp, status, error, message, path]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-10-31T00:11:55Z'
+        status:
+          type: integer
+          example: 409
+        error:
+          type: string
+          description: Frase estándar del código HTTP.
+          example: Conflict
+        message:
+          type: string
+          description: Mensaje en español, entendible para la organizadora.
+          example: El proveedor «Sonido y Luces del Huila» ya está asignado a este evento para el servicio «Sonido e iluminación»
+        path:
+          type: string
+          example: /api/v1/proveedores/eventos
+        errores:
+          type: array
+          description: Detalle por campo (solo en errores de validación o de formato).
+          items:
+            $ref: '#/components/schemas/ErrorCampo'
+    ErrorCampo:
+      type: object
+      required: [campo, mensaje]
+      properties:
+        campo:
+          type: string
+          example: costoAcordado
+        mensaje:
+          type: string
+          example: debe ser mayor que 0
+    ProveedorRequest:
+      type: object
+      required: [nombre, categoria, contacto]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          example: Sonido y Luces del Huila
+        categoria:
+          type: string
+          minLength: 1
+          description: Texto libre (por ejemplo SONIDO, BANQUETES, FLORISTERIA, FOTOGRAFIA).
+          example: SONIDO
+        contacto:
+          type: string
+          minLength: 1
+          example: '3112223344'
+    ProveedorResponseDTO:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 0d137724-90c4-40dd-832b-5fc30b37409f
+        nombre:
+          type: string
+          example: Sonido y Luces del Huila
+        categoria:
+          type: string
+          example: SONIDO
+        contacto:
+          type: string
+          example: '3112223344'
+        activo:
+          type: boolean
+          example: true
+    EstadoProveedorRequest:
+      type: object
+      required: [activo]
+      properties:
+        activo:
+          type: boolean
+          example: false
+    EstadoAsignacion:
+      type: string
+      enum: [PENDIENTE, CONFIRMADO, CANCELADO]
+      example: PENDIENTE
+    EstadoAsignacionRequest:
+      type: object
+      required: [estado]
+      description: Solo se acepta CONFIRMADO (los otros valores del enum responden 409).
+      properties:
+        estado:
+          $ref: '#/components/schemas/EstadoAsignacion'
+    EventoProveedorRequest:
+      type: object
+      required: [eventoId, proveedorId, servicioAsignado, costoAcordado]
+      properties:
+        eventoId:
+          type: string
+          format: uuid
+          example: af79495b-9065-4b83-b08e-83ca7edabc5a
+        proveedorId:
+          type: string
+          format: uuid
+          example: 0d137724-90c4-40dd-832b-5fc30b37409f
+        servicioAsignado:
+          type: string
+          minLength: 1
+          example: Sonido e iluminación
+        costoAcordado:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+          description: Debe ser mayor que 0.
+          example: 1200000
+        estado:
+          allOf:
+            - $ref: '#/components/schemas/EstadoAsignacion'
+          description: Opcional; si no se envía, la asignación queda PENDIENTE.
+    EventoProveedorResponseDTO:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 25a25de3-6dc0-43a3-95d1-cb8e039bc677
+        eventoId:
+          type: string
+          format: uuid
+          example: af79495b-9065-4b83-b08e-83ca7edabc5a
+        proveedorId:
+          type: string
+          format: uuid
+          example: 0d137724-90c4-40dd-832b-5fc30b37409f
+        servicioAsignado:
+          type: string
+          example: Sonido e iluminación
+        costoAcordado:
+          type: number
+          example: 1200000.00
+        estado:
+          $ref: '#/components/schemas/EstadoAsignacion'
+    PaginaProveedor:
+      allOf:
+        - $ref: '#/components/schemas/PaginaBase'
+        - type: object
+          properties:
+            contenido:
+              type: array
+              items:
+                $ref: '#/components/schemas/ProveedorResponseDTO'
+    PaginaEventoProveedor:
+      allOf:
+        - $ref: '#/components/schemas/PaginaBase'
+        - type: object
+          properties:
+            contenido:
+              type: array
+              items:
+                $ref: '#/components/schemas/EventoProveedorResponseDTO'
+    PaginaBase:
+      type: object
+      description: Página de resultados (formato propio de la API, igual en todos los listados).
+      required: [contenido, pagina, tamanoPagina, totalElementos, totalPaginas]
+      properties:
+        contenido:
+          type: array
+          items: {}
+        pagina:
+          type: integer
+          description: Número de la página devuelta (empieza en 0).
+          example: 0
+        tamanoPagina:
+          type: integer
+          description: Tamaño de página solicitado.
+          example: 10
+        totalElementos:
+          type: integer
+          format: int64
+          description: Total de elementos que cumplen el filtro.
+          example: 2
+        totalPaginas:
+          type: integer
+          description: Total de páginas.
+          example: 1

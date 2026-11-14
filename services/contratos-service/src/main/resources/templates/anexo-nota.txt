@@ -1,0 +1,1 @@
+Este anexo no modifica el contrato original, cuyo valor total sigue siendo {{valorTotal}}. Los servicios adicionales se suman a ese valor: {{valorConAdicionales}} en total.

@@ -1,0 +1,439 @@
+openapi: 3.0.3
+info:
+  title: Maxi Eventos - Notificaciones Service
+  description: >-
+    Notificaciones simuladas para el cliente (no se envía ningún correo). El servicio consume eventos.confirmados,
+    pagos.registrados y (Fase 11E) eventos.proximos con el consumer group notificaciones-group y guarda una notificación GENERADA por mensaje, con
+    destinatario cliente:<clienteId> y el asunto y el mensaje en español. Las notificaciones no se modifican por REST; desde
+    la Fase 11H (campanita de la interfaz) se registra qué notificaciones leyó cada usuario (tabla notificaciones_lecturas,
+    usuario = sub del JWT): recientes, sin-leer, marcar una y marcar todas.
+  version: 1.2.0
+servers:
+  - url: http://localhost:8089/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /notificaciones:
+    get:
+      operationId: listarNotificaciones
+      summary: Listar las notificaciones generadas
+      description: 'Filtro opcional por eventoId. Campos para sort: fechaCreacion, tipo (por defecto fechaCreacion,desc).'
+      parameters:
+        - name: eventoId
+          in: query
+          required: false
+          description: Evento de negocio al que se refieren las notificaciones.
+          schema:
+            type: string
+            format: uuid
+            example: af79495b-9065-4b83-b08e-83ca7edabc5a
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+        - $ref: '#/components/parameters/sort'
+      responses:
+        '200':
+          description: Página de notificaciones
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginaNotificacion'
+              example:
+                contenido:
+                  - id: 961b1305-7d44-4b23-b407-d16560c1e124
+                    idEvento: 09d47d63-ffc8-436a-84d8-7c51e58a0698
+                    eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                    tipo: PAGO_REGISTRADO
+                    destinatario: cliente:e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                    asunto: Abono registrado
+                    mensaje: Hola. Registramos su abono de 1.044.000,00 COP (TRANSFERENCIA) el 30 de octubre de 2026 a las 18:59. Gracias por su pago; puede consultar su saldo con la organizadora.
+                    estado: GENERADA
+                    fechaCreacion: '2026-10-30T23:59:40.268911Z'
+                  - id: 1ebaed07-a08a-4f69-baf1-c2623c3ad065
+                    idEvento: 1cd59410-e5ff-4cfb-bd15-c9f06d31a607
+                    eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                    tipo: EVENTO_CONFIRMADO
+                    destinatario: cliente:e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                    asunto: 'Evento confirmado: Quince años de Lucía'
+                    mensaje: Hola. Le confirmamos que su evento «Quince años de Lucía» (Quince años) del sábado 5 de diciembre de 2026 quedó reservado para 105 invitados (90 adultos y 15 niños). La fecha ya está apartada para usted. Gracias por confiar en Maxi Eventos.
+                    estado: GENERADA
+                    fechaCreacion: '2026-10-30T23:59:40.268921Z'
+                  - id: 72eacec6-537f-4c75-9ce6-cf589560ae93
+                    idEvento: dc81953c-5812-46f6-9a60-0f1c8a191389
+                    eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                    tipo: PAGO_REGISTRADO
+                    destinatario: cliente:e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                    asunto: Abono registrado
+                    mensaje: Hola. Registramos su abono de 1.566.000,00 COP (EFECTIVO) el 30 de octubre de 2026 a las 18:59. Gracias por su pago; puede consultar su saldo con la organizadora.
+                    estado: GENERADA
+                    fechaCreacion: '2026-10-30T23:59:40.504112Z'
+                pagina: 0
+                tamanoPagina: 10
+                totalElementos: 3
+                totalPaginas: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /notificaciones/recientes:
+    get:
+      operationId: misNotificacionesRecientes
+      summary: Fase 11H (campanita) — las notificaciones recientes con la lectura del usuario actual
+      description: >-
+        Todas las notificaciones de todos los eventos, de la más reciente a la más antigua (fechaCreacion = cuándo se recibió).
+        Cada una dice si el usuario del token (su sub) ya la leyó. Las lecturas son POR USUARIO: lo que lee la organizadora
+        no cambia para el asistente. Cualquier token válido (los dos roles).
+      parameters:
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+      responses:
+        '200':
+          description: Página de notificaciones del usuario actual
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginaMiNotificacion'
+              example:
+                contenido:
+                  - id: 2d7c1a40-5e3b-4c7e-9a10-0b1c2d3e4f50
+                    idEvento: 0e1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+                    eventoId: 9bc88030-2f02-4cda-8af7-8c55fb68a652
+                    tipo: EVENTO_PROXIMO
+                    destinatario: cliente:4ed0c339-7769-4355-9194-01a0bdebaa7e
+                    asunto: 'Falta 1 día para su evento: Boda de Gabriela y Mateo'
+                    mensaje: Hola. Falta 1 día para su evento «Boda de Gabriela y Mateo» (Boda) del sábado 7 de noviembre de 2026. Estamos preparando todo para ese día; si necesita algo, comuníquese con la organizadora. Gracias por confiar en Maxi Eventos.
+                    estado: GENERADA
+                    fechaCreacion: '2026-11-06T20:45:12.123456Z'
+                    leida: false
+                    leidaEn: null
+                pagina: 0
+                tamanoPagina: 10
+                totalElementos: 1
+                totalPaginas: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /notificaciones/sin-leer:
+    get:
+      operationId: notificacionesSinLeer
+      summary: Fase 11H — cuántas notificaciones no ha leído el usuario actual (el número de la campanita)
+      responses:
+        '200':
+          description: Conteo del usuario del token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SinLeerResponse'
+              example:
+                sinLeer: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /notificaciones/{id}/leida:
+    patch:
+      operationId: marcarNotificacionLeida
+      summary: Fase 11H — marcar una notificación como leída para el usuario actual
+      description: Idempotente; si ya estaba leída conserva la fecha de la primera lectura. Sin cuerpo.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: 2d7c1a40-5e3b-4c7e-9a10-0b1c2d3e4f50
+      responses:
+        '200':
+          description: La notificación, ya leída por el usuario actual
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiNotificacion'
+              example:
+                id: 2d7c1a40-5e3b-4c7e-9a10-0b1c2d3e4f50
+                idEvento: 0e1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+                eventoId: 9bc88030-2f02-4cda-8af7-8c55fb68a652
+                tipo: EVENTO_PROXIMO
+                destinatario: cliente:4ed0c339-7769-4355-9194-01a0bdebaa7e
+                asunto: 'Falta 1 día para su evento: Boda de Gabriela y Mateo'
+                mensaje: Hola. Falta 1 día para su evento «Boda de Gabriela y Mateo»…
+                estado: GENERADA
+                fechaCreacion: '2026-11-06T20:45:12.123456Z'
+                leida: true
+                leidaEn: '2026-11-06T20:46:03.871200Z'
+        '400':
+          description: El id no es un UUID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-11-06T20:46:03Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/notificaciones/x/leida
+                errores:
+                  - campo: id
+                    mensaje: debe ser un identificador válido (UUID)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No existe una notificación con ese id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-11-06T20:46:03Z'
+                status: 404
+                error: Not Found
+                message: No existe una notificación con id 11111111-1111-1111-1111-111111111111
+                path: /api/v1/notificaciones/11111111-1111-1111-1111-111111111111/leida
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /notificaciones/leidas:
+    patch:
+      operationId: marcarTodasNotificacionesLeidas
+      summary: Fase 11H — marcar todas como leídas para el usuario actual
+      description: Marca las que el usuario todavía no había leído (las de los demás usuarios no cambian). Sin cuerpo.
+      responses:
+        '200':
+          description: Cuántas se marcaron ahora (0 si ya estaban todas leídas)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarcadasResponse'
+              example:
+                marcadas: 18
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    BadRequest:
+      description: Parámetro inválido (eventoId no es UUID, page/size fuera de rango o sort no permitido)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            eventoIdInvalido:
+              value:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/notificaciones
+                errores:
+                  - campo: eventoId
+                    mensaje: debe ser un identificador válido (UUID)
+            sortNoPermitido:
+              value:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 400
+                error: Bad Request
+                message: 'debe tener el formato campo,asc o campo,desc; campos permitidos: fechaCreacion, tipo'
+                path: /api/v1/notificaciones
+                errores:
+                  - campo: sort
+                    mensaje: 'debe tener el formato campo,asc o campo,desc; campos permitidos: fechaCreacion, tipo'
+    Unauthorized:
+      description: Falta el token, venció o no es válido (firma, emisor o formato). Cuerpo ErrorResponse (Fase 7).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            sinToken:
+              value: {timestamp: '2026-10-28T20:15:00Z', status: 401, error: Unauthorized, message: 'Debes iniciar sesión para realizar esta operación. Envía el header Authorization: Bearer <token>.', path: /api/v1/notificaciones}
+            tokenVencido:
+              value: {timestamp: '2026-10-28T20:15:00Z', status: 401, error: Unauthorized, message: El token venció. Inicia sesión de nuevo., path: /api/v1/notificaciones}
+            tokenInvalido:
+              value: {timestamp: '2026-10-28T20:15:00Z', status: 401, error: Unauthorized, message: El token no es válido. Inicia sesión de nuevo., path: /api/v1/notificaciones}
+    InternalServerError:
+      description: Error interno del servidor (mensaje neutro; el detalle queda solo en el log del servicio)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {timestamp: '2026-10-31T00:11:55Z', status: 500, error: Internal Server Error, message: Ocurrió un error interno. Intenta de nuevo más tarde., path: /api/v1/notificaciones}
+  parameters:
+    page:
+      name: page
+      in: query
+      required: false
+      description: Número de página (empieza en 0).
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    size:
+      name: size
+      in: query
+      required: false
+      description: Tamaño de página (máximo 100); fuera de rango responde 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    sort:
+      name: sort
+      in: query
+      required: false
+      description: Ordenamiento campo,asc o campo,desc. Solo se aceptan los campos indicados en cada operación; otro valor responde 400.
+      schema:
+        type: string
+        example: fechaCreacion,desc
+  schemas:
+    Notificacion:
+      type: object
+      required: [id, idEvento, eventoId, tipo, destinatario, asunto, mensaje, estado, fechaCreacion]
+      properties:
+        id:
+          type: string
+          format: uuid
+        idEvento:
+          type: string
+          format: uuid
+          description: idEvento del mensaje Kafka que originó la notificación (una notificación por mensaje).
+        eventoId:
+          type: string
+          format: uuid
+        tipo:
+          type: string
+          description: Fase 11E agrega EVENTO_PROXIMO ("Faltan N días para su evento…").
+          enum: [EVENTO_CONFIRMADO, PAGO_REGISTRADO, EVENTO_PROXIMO]
+        destinatario:
+          type: string
+          description: cliente:<clienteId> (sin datos de contacto; no hay envío real).
+          example: cliente:e146c96a-919d-4e82-b1c9-ebda1bca8b92
+        asunto:
+          type: string
+        mensaje:
+          type: string
+        estado:
+          type: string
+          enum: [GENERADA]
+        fechaCreacion:
+          type: string
+          format: date-time
+    MiNotificacion:
+      description: Fase 11H. La notificación más la lectura del usuario actual (leida / leidaEn son de ese usuario).
+      allOf:
+        - $ref: '#/components/schemas/Notificacion'
+        - type: object
+          required: [leida]
+          properties:
+            leida:
+              type: boolean
+            leidaEn:
+              type: string
+              format: date-time
+              nullable: true
+    PaginaMiNotificacion:
+      allOf:
+        - $ref: '#/components/schemas/PaginaBase'
+        - type: object
+          properties:
+            contenido:
+              type: array
+              items:
+                $ref: '#/components/schemas/MiNotificacion'
+    SinLeerResponse:
+      type: object
+      required: [sinLeer]
+      properties:
+        sinLeer:
+          type: integer
+          format: int64
+    MarcadasResponse:
+      type: object
+      required: [marcadas]
+      properties:
+        marcadas:
+          type: integer
+    PaginaNotificacion:
+      allOf:
+        - $ref: '#/components/schemas/PaginaBase'
+        - type: object
+          properties:
+            contenido:
+              type: array
+              items:
+                $ref: '#/components/schemas/Notificacion'
+    PaginaBase:
+      type: object
+      description: Página de resultados (formato propio de la API, igual en todos los listados).
+      required: [contenido, pagina, tamanoPagina, totalElementos, totalPaginas]
+      properties:
+        contenido:
+          type: array
+          items: {}
+        pagina:
+          type: integer
+          description: Número de la página devuelta (empieza en 0).
+          example: 0
+        tamanoPagina:
+          type: integer
+          description: Tamaño de página solicitado.
+          example: 10
+        totalElementos:
+          type: integer
+          format: int64
+          description: Total de elementos que cumplen el filtro.
+          example: 2
+        totalPaginas:
+          type: integer
+          description: Total de páginas.
+          example: 1
+    ErrorResponse:
+      type: object
+      description: Formato único de error en todos los microservicios. errores solo aparece cuando hay detalles por campo.
+      required: [timestamp, status, error, message, path]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-10-28T15:30:00Z'
+        status:
+          type: integer
+          example: 400
+        error:
+          type: string
+          description: Frase estándar del código HTTP.
+          example: Bad Request
+        message:
+          type: string
+          description: Mensaje en español, entendible para la organizadora.
+          example: Los datos enviados no son válidos. Revisa los campos indicados.
+        path:
+          type: string
+          example: /api/v1/notificaciones
+        errores:
+          type: array
+          description: Detalle por campo (solo en errores de validación o de formato).
+          items:
+            $ref: '#/components/schemas/ErrorCampo'
+    ErrorCampo:
+      type: object
+      required: [campo, mensaje]
+      properties:
+        campo:
+          type: string
+          example: sort
+        mensaje:
+          type: string
+          example: 'debe tener el formato campo,asc o campo,desc; campos permitidos: fechaCreacion, tipo'

@@ -1,0 +1,1071 @@
+openapi: 3.0.3
+info:
+  title: Maxi Eventos - Eventos Service
+  description: |
+    Núcleo del negocio: eventos (fiestas de 15 años y bodas) y agenda de fechas.
+    Reglas: la empresa solo trabaja los días permitidos (maxi-eventos.dias-permitidos, variable DIAS_PERMITIDOS; por
+    defecto viernes, sábado y domingo): solo se registran eventos en esos días (otro día → 400 en el campo fecha);
+    un evento por fecha; un solo evento por fin de semana (viernes, sábado y domingo). Confirmar exige contrato FIRMADO (contratos-service) y lo abonado ≥ monto de
+    reserva requerido (finanzas-service). Tras confirmar se publica EVENTO_CONFIRMADO en el tópico
+    eventos.confirmados (después del commit, con outbox en eventos_mensajes_salientes). Fase 11E: recordatorios
+    EVENTO_PROXIMO en el tópico eventos.proximos (tarea programada y POST /recordatorios/ejecutar, solo ADMINISTRADOR).
+  version: 2.2.0
+servers:
+  - url: http://localhost:8081/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /eventos:
+    post:
+      operationId: crearEvento
+      summary: Crear un evento (queda PENDIENTE y la fecha pasa a PENDIENTE)
+      description: |
+        Valida por REST que el cliente exista (clientes-service) y, si se indica lugarId, que el lugar exista, esté
+        ACTIVO y tenga capacidad suficiente (lugares-service). La fecha debe ser posterior a hoy (hora de Colombia) y
+        un día permitido (por defecto viernes, sábado o domingo; si no, 400 en el campo fecha sin consultar otros
+        servicios), estar libre y no chocar con otro evento del mismo fin de semana (409).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CrearEventoRequest'
+            example:
+              nombreEvento: Quince años de Lucía
+              clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+              fecha: '2026-12-05'
+              tipoEvento: QUINCE_ANOS
+              cantidadAdultos: 90
+              cantidadNinos: 15
+              zona: NEIVA
+              lugarId: null
+      responses:
+        '201':
+          description: Evento creado
+          headers:
+            Location:
+              description: URL del evento creado (/api/v1/eventos/{id}).
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventoResponse'
+              example:
+                id: af79495b-9065-4b83-b08e-83ca7edabc5a
+                nombreEvento: Quince años de Lucía
+                fecha: '2026-12-05'
+                clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                tipoEvento: QUINCE_ANOS
+                cantidadAdultos: 90
+                cantidadNinos: 15
+                numInvitados: 105
+                zona: NEIVA
+                lugarId: null
+                estado: PENDIENTE
+                fechaCreacion: '2026-10-30T23:59:37.317098Z'
+        '400':
+          description: Datos inválidos (detalle por campo en errores)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                datosInvalidos:
+                  value:
+                    timestamp: '2026-10-31T00:11:53Z'
+                    status: 400
+                    error: Bad Request
+                    message: Los datos enviados no son válidos. Revisa los campos indicados.
+                    path: /api/v1/eventos
+                    errores:
+                      - campo: cantidadAdultos
+                        mensaje: debe ser mayor que o igual a 0
+                      - campo: nombreEvento
+                        mensaje: el tamaño debe estar entre 3 y 150
+                tipoNoPermitido:
+                  value:
+                    timestamp: '2026-10-31T00:11:53Z'
+                    status: 400
+                    error: Bad Request
+                    message: Los datos enviados no son válidos. Revisa los campos indicados.
+                    path: /api/v1/eventos
+                    errores:
+                      - campo: tipoEvento
+                        mensaje: 'valor no permitido; los valores válidos son: QUINCE_ANOS, BODA'
+                fechaPasada:
+                  value:
+                    timestamp: '2026-10-31T00:11:53Z'
+                    status: 400
+                    error: Bad Request
+                    message: debe ser una fecha posterior a hoy
+                    path: /api/v1/eventos
+                    errores:
+                      - campo: fecha
+                        mensaje: debe ser una fecha posterior a hoy
+                diaNoPermitido:
+                  summary: Fecha en un día que no es viernes, sábado ni domingo (10B3)
+                  value:
+                    timestamp: '2026-11-03T20:18:27Z'
+                    status: 400
+                    error: Bad Request
+                    message: Solo se pueden registrar eventos en viernes, sábado o domingo.
+                    path: /api/v1/eventos
+                    errores:
+                      - campo: fecha
+                        mensaje: Solo se pueden registrar eventos en viernes, sábado o domingo.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: El cliente o el lugar indicados no existen
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 404
+                error: Not Found
+                message: No existe un cliente con id 11111111-1111-1111-1111-111111111111
+                path: /api/v1/eventos
+        '409':
+          description: La fecha no está disponible, ya hay un evento ese fin de semana, o el lugar está inactivo o sin capacidad
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                mismoFinDeSemana:
+                  value:
+                    timestamp: '2026-10-31T00:11:54Z'
+                    status: 409
+                    error: Conflict
+                    message: Ya hay un evento o bloqueo el 2026-12-05 (OCUPADA), en el mismo fin de semana. Solo se permite un evento por fin de semana (viernes a domingo).
+                    path: /api/v1/eventos
+                fechaNoDisponible:
+                  value:
+                    timestamp: '2026-10-31T00:11:54Z'
+                    status: 409
+                    error: Conflict
+                    message: La fecha 2027-01-02 no está disponible (estado PENDIENTE). Elige otra fecha.
+                    path: /api/v1/eventos
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      operationId: listarEventos
+      summary: Listar eventos con filtros y paginación
+      description: 'Campos para sort: fecha, fechaCreacion, tipoEvento, estado, nombreEvento, numInvitados (por defecto fecha,asc).'
+      parameters:
+        - name: estado
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/EstadoEvento'
+        - name: tipo
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/TipoEvento'
+        - name: desde
+          in: query
+          required: false
+          description: Fecha mínima del evento (AAAA-MM-DD).
+          schema:
+            type: string
+            format: date
+            example: '2026-12-01'
+        - name: hasta
+          in: query
+          required: false
+          description: Fecha máxima del evento (AAAA-MM-DD); debe ser ≥ desde.
+          schema:
+            type: string
+            format: date
+            example: '2027-01-31'
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+        - $ref: '#/components/parameters/sort'
+      responses:
+        '200':
+          description: Página de eventos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginaEvento'
+              example:
+                contenido:
+                  - id: af79495b-9065-4b83-b08e-83ca7edabc5a
+                    nombreEvento: Quince años de Lucía
+                    fecha: '2026-12-05'
+                    clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                    tipoEvento: QUINCE_ANOS
+                    cantidadAdultos: 90
+                    cantidadNinos: 15
+                    numInvitados: 105
+                    zona: NEIVA
+                    lugarId: 246c1c43-72c7-4d34-bafe-6beb822562e3
+                    estado: RESERVADO
+                    fechaCreacion: '2026-10-30T23:59:37.317098Z'
+                pagina: 0
+                tamanoPagina: 10
+                totalElementos: 1
+                totalPaginas: 1
+        '400':
+          description: Filtro o paginación inválidos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                tamanoFueraDeRango:
+                  value:
+                    timestamp: '2026-10-31T00:11:54Z'
+                    status: 400
+                    error: Bad Request
+                    message: Los datos enviados no son válidos. Revisa los campos indicados.
+                    path: /api/v1/eventos
+                    errores:
+                      - campo: size
+                        mensaje: debe ser menor que o igual a 100
+                sortNoPermitido:
+                  value:
+                    timestamp: '2026-10-31T00:11:54Z'
+                    status: 400
+                    error: Bad Request
+                    message: 'debe tener el formato campo,asc o campo,desc; campos permitidos: estado, fecha, fechaCreacion, nombreEvento, numInvitados, tipoEvento'
+                    path: /api/v1/eventos
+                    errores:
+                      - campo: sort
+                        mensaje: 'debe tener el formato campo,asc o campo,desc; campos permitidos: estado, fecha, fechaCreacion, nombreEvento, numInvitados, tipoEvento'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /eventos/{id}:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    get:
+      operationId: obtenerEvento
+      summary: Obtener un evento por UUID (también lo usan proveedores-service, contratos-service, finanzas-service y el gateway)
+      responses:
+        '200':
+          description: Evento encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventoResponse'
+              examples:
+                reservado:
+                  $ref: '#/components/examples/EventoReservado'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /eventos/{id}/confirmar:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    patch:
+      operationId: confirmarEvento
+      summary: Confirmar el evento (RESERVADO) y ocupar la fecha
+      description: |
+        Primero exige que la fecha del evento no haya pasado ("hoy" en ZONA_HORARIA; un evento de hoy todavía se confirma)
+        (Fase 11I). Luego valida por REST que el contrato del evento esté FIRMADO y que lo abonado cubra el monto de reserva
+        requerido de la cotización. En una transacción el evento pasa a RESERVADO y la fecha a OCUPADA; DESPUÉS del commit se publica
+        EVENTO_CONFIRMADO (sobre común con idEvento, tipo, version, fechaOcurrencia, servicioOrigen, eventoId y datos;
+        clave = eventoId) en eventos.confirmados. El formato de los mensajes está en docs/kafka.md.
+      responses:
+        '200':
+          description: Evento confirmado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventoResponse'
+              examples:
+                reservado:
+                  $ref: '#/components/examples/EventoReservado'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Ya confirmado o cancelado, fecha ya pasada, sin contrato, contrato sin firmar, sin cotización o abono insuficiente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                fechaPasada:
+                  summary: La fecha del evento ya pasó (Fase 11I)
+                  value:
+                    timestamp: '2026-11-10T15:00:00Z'
+                    status: 409
+                    error: Conflict
+                    message: No se puede confirmar un evento cuya fecha ya pasó.
+                    path: /api/v1/eventos/633930f6-534f-4687-96c7-e853be0c3389/confirmar
+                sinContrato:
+                  value:
+                    timestamp: '2026-10-31T00:11:54Z'
+                    status: 409
+                    error: Conflict
+                    message: El evento no tiene contrato. Genera el contrato y márcalo como firmado antes de confirmar.
+                    path: /api/v1/eventos/633930f6-534f-4687-96c7-e853be0c3389/confirmar
+                contratoSinFirmar:
+                  value:
+                    timestamp: '2026-10-31T00:11:54Z'
+                    status: 409
+                    error: Conflict
+                    message: El contrato del evento está en estado PENDIENTE; debe estar FIRMADO para confirmar el evento.
+                    path: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/confirmar
+                abonoInsuficiente:
+                  value:
+                    timestamp: '2026-10-31T00:11:54Z'
+                    status: 409
+                    error: Conflict
+                    message: Lo abonado (1044000.00 COP) no alcanza el monto de reserva requerido (2610000.00 COP). Faltan 1566000.00 COP.
+                    path: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/confirmar
+                yaConfirmado:
+                  value:
+                    timestamp: '2026-10-31T00:11:54Z'
+                    status: 409
+                    error: Conflict
+                    message: El evento ya está confirmado (RESERVADO).
+                    path: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/confirmar
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /eventos/{id}/cancelar:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    patch:
+      operationId: cancelarEvento
+      summary: Cancelar el evento (CANCELADO) y liberar la fecha (DISPONIBLE)
+      responses:
+        '200':
+          description: Evento cancelado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventoResponse'
+              example:
+                id: 406ea893-c467-4561-a03f-ebec8d569cce
+                nombreEvento: Quince años de María José
+                fecha: '2027-01-30'
+                clienteId: f6bbb8d3-fabb-42e9-a6c2-87caecb9cac5
+                tipoEvento: QUINCE_ANOS
+                cantidadAdultos: 60
+                cantidadNinos: 10
+                numInvitados: 70
+                zona: NEIVA
+                lugarId: null
+                estado: CANCELADO
+                fechaCreacion: '2026-10-30T23:59:45.649068Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: El evento ya está cancelado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 409
+                error: Conflict
+                message: El evento ya está cancelado.
+                path: /api/v1/eventos/406ea893-c467-4561-a03f-ebec8d569cce/cancelar
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /eventos/{id}/lugar:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    patch:
+      operationId: asignarLugar
+      summary: Asignar un lugar al evento
+      description: Valida por REST que el lugar exista, esté ACTIVO y tenga capacidad para los invitados.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AsignarLugarRequest'
+            example:
+              lugarId: 246c1c43-72c7-4d34-bafe-6beb822562e3
+      responses:
+        '200':
+          description: Lugar asignado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventoResponse'
+              examples:
+                conLugar:
+                  $ref: '#/components/examples/EventoReservado'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: El evento o el lugar no existen
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 404
+                error: Not Found
+                message: No existe un lugar con id 11111111-1111-1111-1111-111111111111
+                path: /api/v1/eventos/633930f6-534f-4687-96c7-e853be0c3389/lugar
+        '409':
+          description: >-
+            Evento cancelado ("No se puede asignar un lugar a un evento cancelado."), lugar inactivo, o lugar sin capacidad
+            ("El lugar <nombre> tiene capacidad para <n> personas y el evento tiene <m> invitados.")
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 409
+                error: Conflict
+                message: El lugar Hacienda El Pórtico está INACTIVO y no se puede asignar a un evento.
+                path: /api/v1/eventos/633930f6-534f-4687-96c7-e853be0c3389/lugar
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /fechas/disponibles:
+    get:
+      operationId: listarFechasDisponibles
+      summary: Fechas en las que se puede crear un evento
+      description: |
+        Devuelve solo los días permitidos (por defecto viernes, sábado y domingo) que están libres y que además no
+        quedan bloqueados por la regla del fin de semana. Por defecto desde mañana y por 90 días; el rango máximo es de
+        366 días. La usa el gateway GraphQL (fechasDisponibles).
+      parameters:
+        - name: desde
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+            example: '2026-12-07'
+        - name: hasta
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+            example: '2026-12-20'
+      responses:
+        '200':
+          description: Fechas disponibles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FechaResponse'
+              example:
+                - fecha: '2026-12-11'
+                  diaSemana: viernes
+                  estado: DISPONIBLE
+                  eventoId: null
+                - fecha: '2026-12-12'
+                  diaSemana: sábado
+                  estado: DISPONIBLE
+                  eventoId: null
+                - fecha: '2026-12-13'
+                  diaSemana: domingo
+                  estado: DISPONIBLE
+                  eventoId: null
+                - fecha: '2026-12-18'
+                  diaSemana: viernes
+                  estado: DISPONIBLE
+                  eventoId: null
+                - fecha: '2026-12-19'
+                  diaSemana: sábado
+                  estado: DISPONIBLE
+                  eventoId: null
+                - fecha: '2026-12-20'
+                  diaSemana: domingo
+                  estado: DISPONIBLE
+                  eventoId: null
+        '400':
+          $ref: '#/components/responses/RangoInvalido'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /fechas:
+    get:
+      operationId: consultarAgenda
+      summary: Fechas registradas en la agenda (con evento o bloqueo) dentro del rango
+      parameters:
+        - name: desde
+          in: query
+          required: false
+          description: Por defecto hoy.
+          schema:
+            type: string
+            format: date
+            example: '2026-12-01'
+        - name: hasta
+          in: query
+          required: false
+          description: Por defecto desde + 89 días (máximo 366 días).
+          schema:
+            type: string
+            format: date
+            example: '2027-01-31'
+      responses:
+        '200':
+          description: Fechas de la agenda
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FechaResponse'
+              example:
+                - fecha: '2026-12-05'
+                  diaSemana: sábado
+                  estado: OCUPADA
+                  eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                - fecha: '2027-01-02'
+                  diaSemana: sábado
+                  estado: PENDIENTE
+                  eventoId: 633930f6-534f-4687-96c7-e853be0c3389
+                - fecha: '2027-01-30'
+                  diaSemana: sábado
+                  estado: DISPONIBLE
+                  eventoId: null
+        '400':
+          $ref: '#/components/responses/RangoInvalido'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /fechas/{fecha}/estado:
+    put:
+      operationId: actualizarEstadoFecha
+      summary: Cambiar manualmente el estado de una fecha (bloqueo o liberación)
+      description: |
+        Una fecha con evento no se cambia (409: cancelar o confirmar el evento). Un bloqueo manual (PENDIENTE u OCUPADA
+        sin evento) solo se permite en los días permitidos (otro día → 400 en el campo fecha) y respeta la regla del fin
+        de semana. DISPONIBLE (liberar) se permite en cualquier día si la fecha no tiene evento.
+      parameters:
+        - name: fecha
+          in: path
+          required: true
+          schema:
+            type: string
+            format: date
+            example: '2027-02-13'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstadoFechaRequest'
+            example:
+              estado: OCUPADA
+      responses:
+        '200':
+          description: Estado actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FechaResponse'
+              example:
+                fecha: '2027-02-13'
+                diaSemana: sábado
+                estado: OCUPADA
+                eventoId: null
+        '400':
+          description: Fecha con formato inválido, estado inválido o bloqueo en un día no permitido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                diaNoPermitido:
+                  summary: Bloquear un martes (10B3)
+                  value:
+                    timestamp: '2026-11-03T20:18:15Z'
+                    status: 400
+                    error: Bad Request
+                    message: Solo se pueden registrar eventos en viernes, sábado o domingo.
+                    path: /api/v1/fechas/2026-11-24/estado
+                    errores:
+                      - campo: fecha
+                        mensaje: Solo se pueden registrar eventos en viernes, sábado o domingo.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: La fecha tiene un evento o el bloqueo choca con otro del mismo fin de semana
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                fechaConEvento:
+                  value:
+                    timestamp: '2026-10-31T00:11:54Z'
+                    status: 409
+                    error: Conflict
+                    message: La fecha 2026-12-05 tiene el evento af79495b-9065-4b83-b08e-83ca7edabc5a (OCUPADA). Para cambiarla, cancela o confirma el evento.
+                    path: /api/v1/fechas/2026-12-05/estado
+                mismoFinDeSemana:
+                  value:
+                    timestamp: '2026-10-31T00:11:54Z'
+                    status: 409
+                    error: Conflict
+                    message: 'No se puede bloquear la fecha 2026-12-04: el 2026-12-05 del mismo fin de semana ya está OCUPADA.'
+                    path: /api/v1/fechas/2026-12-04/estado
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /recordatorios/ejecutar:
+    post:
+      operationId: ejecutarRecordatorios
+      summary: Ejecutar ya la revisión de recordatorios EVENTO_PROXIMO (Fase 11E, solo ADMINISTRADOR)
+      description: |
+        La misma revisión que hace la tarea programada (RECORDATORIOS_CRON, por defecto todos los días a las 7:00 en
+        ZONA_HORARIA; "-" la desactiva). Revisa los eventos RESERVADOS con fecha entre mañana y hoy + el umbral mayor de
+        RECORDATORIOS_DIAS (por defecto 7,1) y, para cada uno, usa el umbral más pequeño que aplica (u ≥ días que faltan).
+        Si ese recordatorio no se había enviado, lo registra en eventos_recordatorios_enviados y deja un EVENTO_PROXIMO en el
+        outbox en la misma transacción (tópico eventos.proximos, clave = eventoId, idEvento determinista) → ENVIADO; si ya se
+        había enviado → YA_ENVIADO (nunca se repite). PENDIENTE y CANCELADO no reciben recordatorio. Sin cuerpo.
+      responses:
+        '200':
+          description: Revisión hecha
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultadoRecordatoriosResponse'
+              example:
+                ejecutadoEn: '2026-11-05T14:00:00.123456Z'
+                hoy: '2026-11-05'
+                umbralesDias: [1, 7]
+                revisados: 2
+                enviados: 1
+                yaEnviados: 1
+                recordatorios:
+                  - eventoId: 7d2f0c1e-4b6a-4f8e-9c3d-1a2b3c4d5e6f
+                    nombreEvento: Boda de Gabriela y Mateo
+                    fecha: '2026-11-07'
+                    diasRestantes: 2
+                    umbralDias: 7
+                    resultado: ENVIADO
+                  - eventoId: 0f8c2b7e-9a41-4d0e-b3a5-7c2e1f6d9a00
+                    nombreEvento: Quince años de Sofía
+                    fecha: '2026-11-06'
+                    diasRestantes: 1
+                    umbralDias: 1
+                    resultado: YA_ENVIADO
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  examples:
+    EventoReservado:
+      summary: Quince años de Lucía, confirmado y con lugar
+      value:
+        id: af79495b-9065-4b83-b08e-83ca7edabc5a
+        nombreEvento: Quince años de Lucía
+        fecha: '2026-12-05'
+        clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+        tipoEvento: QUINCE_ANOS
+        cantidadAdultos: 90
+        cantidadNinos: 15
+        numInvitados: 105
+        zona: NEIVA
+        lugarId: 246c1c43-72c7-4d34-bafe-6beb822562e3
+        estado: RESERVADO
+        fechaCreacion: '2026-10-30T23:59:37.317098Z'
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+        example: af79495b-9065-4b83-b08e-83ca7edabc5a
+    page:
+      name: page
+      in: query
+      required: false
+      description: Número de página (empieza en 0).
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    size:
+      name: size
+      in: query
+      required: false
+      description: Tamaño de página (máximo 100); fuera de rango responde 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    sort:
+      name: sort
+      in: query
+      required: false
+      description: Ordenamiento campo,asc o campo,desc. Solo se aceptan los campos indicados en cada operación; otro valor responde 400.
+      schema:
+        type: string
+        example: fecha,asc
+  responses:
+    Forbidden:
+      description: >-
+        Fase 11D: el token es válido pero su rol no permite la operación. El bloqueo o la liberación manual de una fecha
+        (PUT /fechas/{fecha}/estado) y, desde la 11E, la ejecución manual de los recordatorios (POST /recordatorios/ejecutar)
+        son solo del ADMINISTRADOR; el ASISTENTE (y un token sin claim rol) recibe 403. Todo el flujo del evento (crear,
+        confirmar, cancelar, asignar lugar) y la consulta de fechas lo pueden hacer los dos roles.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-11-04T21:00:00Z'
+            status: 403
+            error: Forbidden
+            message: No tienes permiso para realizar esta operación.
+            path: /api/v1/fechas/2026-12-12/estado
+    BadRequest:
+      description: >-
+        Solicitud inválida: identificador o fecha con formato incorrecto, cuerpo inválido o ruta sin identificador (por
+        ejemplo /eventos//confirmar); incluye el detalle por campo en errores cuando aplica
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            identificadorInvalido:
+              value:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/eventos/abc
+                errores:
+                  - campo: id
+                    mensaje: debe ser un identificador válido (UUID)
+            rutaInvalida:
+              value:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 400
+                error: Bad Request
+                message: 'La ruta no es válida: falta un identificador o contiene caracteres no permitidos.'
+                path: /api/v1/eventos//confirmar
+    RangoInvalido:
+      description: Rango de fechas inválido (hasta anterior a desde o más de 366 días) o fecha con formato incorrecto
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:54Z'
+            status: 400
+            error: Bad Request
+            message: debe ser posterior o igual a desde
+            path: /api/v1/fechas/disponibles
+            errores:
+              - campo: hasta
+                mensaje: debe ser posterior o igual a desde
+    Unauthorized:
+      description: Falta el token, venció o no es válido (firma, emisor o formato). Cuerpo ErrorResponse (Fase 7).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            sinToken:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: 'Debes iniciar sesión para realizar esta operación. Envía el header Authorization: Bearer <token>.', path: /api/v1/eventos}
+            tokenVencido:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: El token venció. Inicia sesión de nuevo., path: /api/v1/eventos}
+            tokenInvalido:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: El token no es válido. Inicia sesión de nuevo., path: /api/v1/eventos}
+    NotFound:
+      description: No existe un evento con ese id
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:54Z'
+            status: 404
+            error: Not Found
+            message: No existe un evento con id 11111111-1111-1111-1111-111111111111
+            path: /api/v1/eventos/11111111-1111-1111-1111-111111111111
+    ServiceUnavailable:
+      description: Un servicio necesario (clientes, lugares, contratos o finanzas) no responde
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:54Z'
+            status: 503
+            error: Service Unavailable
+            message: El servicio de contratos no está disponible en este momento. Intenta de nuevo más tarde.
+            path: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/confirmar
+    InternalServerError:
+      description: Error interno del servidor (mensaje neutro; el detalle queda solo en el log del servicio)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {timestamp: '2026-10-31T00:11:54Z', status: 500, error: Internal Server Error, message: Ocurrió un error interno. Intenta de nuevo más tarde., path: /api/v1/eventos}
+  schemas:
+    TipoEvento:
+      type: string
+      enum: [QUINCE_ANOS, BODA]
+    ZonaEvento:
+      type: string
+      enum: [NEIVA, RURAL]
+    EstadoEvento:
+      type: string
+      enum: [PENDIENTE, RESERVADO, CANCELADO]
+    EstadoFecha:
+      type: string
+      enum: [DISPONIBLE, PENDIENTE, OCUPADA]
+    CrearEventoRequest:
+      type: object
+      required: [nombreEvento, clienteId, fecha, tipoEvento, cantidadAdultos, cantidadNinos, zona]
+      properties:
+        nombreEvento:
+          type: string
+          minLength: 3
+          maxLength: 150
+          example: Quince años de Lucía
+        clienteId:
+          type: string
+          format: uuid
+          example: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+        fecha:
+          type: string
+          format: date
+          description: Debe ser posterior a hoy (hora de Colombia) y un día permitido (por defecto viernes, sábado o domingo).
+          example: '2026-12-05'
+        tipoEvento:
+          $ref: '#/components/schemas/TipoEvento'
+        cantidadAdultos:
+          type: integer
+          minimum: 0
+          maximum: 5000
+          example: 90
+        cantidadNinos:
+          type: integer
+          minimum: 0
+          maximum: 5000
+          description: Adultos + niños debe ser al menos 1.
+          example: 15
+        zona:
+          $ref: '#/components/schemas/ZonaEvento'
+        lugarId:
+          type: string
+          format: uuid
+          nullable: true
+    AsignarLugarRequest:
+      type: object
+      required: [lugarId]
+      properties:
+        lugarId:
+          type: string
+          format: uuid
+          example: 246c1c43-72c7-4d34-bafe-6beb822562e3
+    EstadoFechaRequest:
+      type: object
+      required: [estado]
+      properties:
+        estado:
+          $ref: '#/components/schemas/EstadoFecha'
+    EventoResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: af79495b-9065-4b83-b08e-83ca7edabc5a
+        nombreEvento:
+          type: string
+          example: Quince años de Lucía
+        fecha:
+          type: string
+          format: date
+          example: '2026-12-05'
+        clienteId:
+          type: string
+          format: uuid
+          example: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+        tipoEvento:
+          $ref: '#/components/schemas/TipoEvento'
+        cantidadAdultos:
+          type: integer
+          example: 90
+        cantidadNinos:
+          type: integer
+          example: 15
+        numInvitados:
+          type: integer
+          example: 105
+        zona:
+          $ref: '#/components/schemas/ZonaEvento'
+        lugarId:
+          type: string
+          format: uuid
+          nullable: true
+        estado:
+          $ref: '#/components/schemas/EstadoEvento'
+        fechaCreacion:
+          type: string
+          format: date-time
+    FechaResponse:
+      type: object
+      properties:
+        fecha:
+          type: string
+          format: date
+        diaSemana:
+          type: string
+          example: sábado
+        estado:
+          $ref: '#/components/schemas/EstadoFecha'
+        eventoId:
+          type: string
+          format: uuid
+          nullable: true
+    ResultadoRecordatoriosResponse:
+      type: object
+      description: >-
+        Fase 11E. revisados = RESERVADOS entre mañana y el umbral mayor; enviados = recordatorios nuevos (cada uno un
+        EVENTO_PROXIMO en el outbox); yaEnviados = los que ya se habían enviado para ese umbral.
+      properties:
+        ejecutadoEn:
+          type: string
+          format: date-time
+        hoy:
+          type: string
+          format: date
+          description: Fecha de hoy en ZONA_HORARIA.
+        umbralesDias:
+          type: array
+          items:
+            type: integer
+          example: [1, 7]
+        revisados:
+          type: integer
+        enviados:
+          type: integer
+        yaEnviados:
+          type: integer
+        recordatorios:
+          type: array
+          items:
+            $ref: '#/components/schemas/Recordatorio'
+    Recordatorio:
+      type: object
+      properties:
+        eventoId:
+          type: string
+          format: uuid
+        nombreEvento:
+          type: string
+        fecha:
+          type: string
+          format: date
+        diasRestantes:
+          type: integer
+        umbralDias:
+          type: integer
+        resultado:
+          type: string
+          enum: [ENVIADO, YA_ENVIADO]
+    PaginaEvento:
+      allOf:
+        - $ref: '#/components/schemas/PaginaBase'
+        - type: object
+          required: [contenido]
+          properties:
+            contenido:
+              type: array
+              items:
+                $ref: '#/components/schemas/EventoResponse'
+    PaginaBase:
+      type: object
+      description: Página de resultados (formato propio de la API, igual en todos los listados).
+      required: [contenido, pagina, tamanoPagina, totalElementos, totalPaginas]
+      properties:
+        contenido:
+          type: array
+          items: {}
+        pagina:
+          type: integer
+          example: 0
+        tamanoPagina:
+          type: integer
+          example: 10
+        totalElementos:
+          type: integer
+          format: int64
+          example: 1
+        totalPaginas:
+          type: integer
+          example: 1
+    ErrorResponse:
+      type: object
+      description: Formato único de error en todos los microservicios. errores solo aparece cuando hay detalles por campo.
+      required: [timestamp, status, error, message, path]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+        errores:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorCampo'
+    ErrorCampo:
+      type: object
+      required: [campo, mensaje]
+      properties:
+        campo:
+          type: string
+        mensaje:
+          type: string

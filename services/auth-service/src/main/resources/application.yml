@@ -1,0 +1,60 @@
+spring:
+  # Mensajes de validación siempre en español, sin depender de la cabecera Accept-Language
+  web:
+    locale: es
+    locale-resolver: fixed
+  application:
+    name: auth-service
+  # Sin usuarios en memoria: la organizadora se valida en AuthService y el resto de peticiones con el JWT
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/maxi_eventos}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+  # Fase 11D: schema.sql crea la tabla usuarios (si no existe) antes de que Hibernate valide el esquema
+  sql:
+    init:
+      mode: always
+  jpa:
+    defer-datasource-initialization: false
+    hibernate:
+      ddl-auto: validate
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+server:
+  port: ${SERVER_PORT:8080}
+auth:
+  # Fase 11D: los dos usuarios se siembran en la tabla usuarios al arrancar (SembradoUsuarios). El id (UUID opaco) es el
+  # sub del JWT: el correo no viaja en el token. Las contraseñas solo como hash BCrypt.
+  usuarios:
+    administrador:
+      correo: ${AUTH_ORGANIZER_EMAIL}
+      id: ${AUTH_ORGANIZER_ID}
+      nombre: ${AUTH_ORGANIZER_NOMBRE:Organizadora}
+      password-hash: ${AUTH_ORGANIZER_PASSWORD_HASH}
+    asistente:
+      correo: ${AUTH_ASISTENTE_EMAIL:}
+      id: ${AUTH_ASISTENTE_ID:}
+      nombre: ${AUTH_ASISTENTE_NOMBRE:Asistente}
+      password-hash: ${AUTH_ASISTENTE_PASSWORD_HASH:}
+  jwt:
+    secret: ${AUTH_JWT_SECRET}
+    # Emisor del token; el gateway y los servicios lo exigen al validar (no es un secreto)
+    issuer: maxi-eventos-auth
+  token-ttl: ${AUTH_TOKEN_TTL:PT8H}
+logging:
+  # Fase 11C: código de referencia de la petición (X-Request-Id; "-" fuera de una petición)
+  pattern:
+    correlation: "[ref=%X{ref:--}] "
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized

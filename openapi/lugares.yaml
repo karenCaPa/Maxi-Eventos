@@ -1,0 +1,507 @@
+openapi: 3.0.3
+info:
+  title: Maxi Eventos - Lugares Service
+  description: >-
+    Catálogo de lugares (salones, fincas, haciendas) con capacidad y estado ACTIVO | INACTIVO. eventos-service lo consulta
+    por REST para asignar un lugar: solo se acepta un lugar ACTIVO con capacidad para los invitados (si no, 409 en Eventos).
+    Las consultas por id y el listado se cachean en Redis; si Redis no responde, se consulta la base de datos.
+  version: 1.1.0
+servers:
+  - url: http://localhost:8083/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /lugares:
+    get:
+      operationId: listarLugares
+      summary: Listar lugares, con filtros opcionales por nombre, tipo y estado
+      description: >-
+        Campos para sort: id, nombre, direccion, tipo, capacidad, estado (por defecto nombre,asc). Respuesta cacheada en
+        Redis (lugares-listado, 30 min); se invalida al crear, actualizar, cambiar el estado o borrar un lugar.
+      parameters:
+        - name: nombre
+          in: query
+          required: false
+          description: Parte del nombre, sin distinguir mayúsculas.
+          schema:
+            type: string
+            example: Ocobos
+        - name: tipo
+          in: query
+          required: false
+          description: Tipo exacto, sin distinguir mayúsculas.
+          schema:
+            type: string
+            example: SALON
+        - name: estado
+          in: query
+          required: false
+          description: Otro valor responde 400.
+          schema:
+            $ref: '#/components/schemas/EstadoLugar'
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+        - $ref: '#/components/parameters/sort'
+      responses:
+        '200':
+          description: Página de lugares
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginaLugar'
+              example:
+                contenido:
+                  - id: 246c1c43-72c7-4d34-bafe-6beb822562e3
+                    nombre: Salón de Eventos Los Ocobos
+                    direccion: 'Calle 21 # 6-40, Neiva'
+                    tipo: SALON
+                    capacidad: 150
+                    estado: ACTIVO
+                pagina: 0
+                tamanoPagina: 10
+                totalElementos: 1
+                totalPaginas: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      operationId: crearLugar
+      summary: Crear un lugar (queda ACTIVO)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LugarRequest'
+            example:
+              nombre: Salón de Eventos Los Ocobos
+              direccion: 'Calle 21 # 6-40, Neiva'
+              tipo: SALON
+              capacidad: 150
+      responses:
+        '201':
+          description: Lugar creado
+          headers:
+            Location:
+              description: URL del lugar creado (/api/v1/lugares/{id}).
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LugarResponseDTO'
+              example:
+                id: 246c1c43-72c7-4d34-bafe-6beb822562e3
+                nombre: Salón de Eventos Los Ocobos
+                direccion: 'Calle 21 # 6-40, Neiva'
+                tipo: SALON
+                capacidad: 150
+                estado: ACTIVO
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /lugares/{id}:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    get:
+      operationId: obtenerLugar
+      summary: Obtener un lugar por UUID
+      description: >-
+        Respuesta cacheada en Redis (lugares, 30 min); se reemplaza al actualizar el lugar o cambiar su estado y se borra al
+        eliminarlo. eventos-service la consulta para rechazar (409) un lugar INACTIVO o sin capacidad suficiente.
+      responses:
+        '200':
+          description: Lugar encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LugarResponseDTO'
+              example:
+                id: 246c1c43-72c7-4d34-bafe-6beb822562e3
+                nombre: Salón de Eventos Los Ocobos
+                direccion: 'Calle 21 # 6-40, Neiva'
+                tipo: SALON
+                capacidad: 150
+                estado: ACTIVO
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      operationId: actualizarLugar
+      summary: Actualizar un lugar
+      description: No cambia el estado (se usa PATCH /lugares/{id}/estado).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LugarRequest'
+            example:
+              nombre: Salón de Eventos Los Ocobos
+              direccion: 'Calle 21 # 6-40, Neiva'
+              tipo: SALON
+              capacidad: 160
+      responses:
+        '200':
+          description: Lugar actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LugarResponseDTO'
+              example:
+                id: 246c1c43-72c7-4d34-bafe-6beb822562e3
+                nombre: Salón de Eventos Los Ocobos
+                direccion: 'Calle 21 # 6-40, Neiva'
+                tipo: SALON
+                capacidad: 160
+                estado: ACTIVO
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      operationId: eliminarLugar
+      summary: Eliminar un lugar
+      description: Borra el lugar y su entrada de la caché. Para dejar de usarlo sin borrarlo, se inactiva con PATCH /lugares/{id}/estado.
+      responses:
+        '204':
+          description: Lugar eliminado (sin cuerpo)
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /lugares/{id}/estado:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    patch:
+      operationId: cambiarEstadoLugar
+      summary: Activar o inactivar un lugar
+      description: >-
+        Un lugar INACTIVO no se puede asignar a eventos (eventos-service responde 409). Actualiza la caché del lugar y
+        limpia la del listado.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstadoLugarRequest'
+            example:
+              estado: INACTIVO
+      responses:
+        '200':
+          description: Lugar con el estado nuevo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LugarResponseDTO'
+              example:
+                id: 550a5a09-b615-4b17-8506-3b69a7f69092
+                nombre: Hacienda El Pórtico
+                direccion: Kilómetro 5 vía a Rivera
+                tipo: HACIENDA
+                capacidad: 200
+                estado: INACTIVO
+        '400':
+          description: Estado ausente o con un valor no permitido, o id inválido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/lugares/246c1c43-72c7-4d34-bafe-6beb822562e3/estado
+                errores:
+                  - campo: estado
+                    mensaje: 'valor no permitido; los valores válidos son: ACTIVO, INACTIVO'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+        example: 246c1c43-72c7-4d34-bafe-6beb822562e3
+    page:
+      name: page
+      in: query
+      required: false
+      description: Número de página (empieza en 0).
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    size:
+      name: size
+      in: query
+      required: false
+      description: Tamaño de página (máximo 100); fuera de rango responde 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    sort:
+      name: sort
+      in: query
+      required: false
+      description: Ordenamiento campo,asc o campo,desc. Solo se aceptan los campos indicados en cada operación; otro valor responde 400.
+      schema:
+        type: string
+        example: nombre,asc
+  responses:
+    Forbidden:
+      description: >-
+        Fase 11D: el token es válido pero su rol no permite la operación. Crear, editar, activar / desactivar y borrar
+        lugares es solo del ADMINISTRADOR; el ASISTENTE (y un token sin claim rol, emitido antes de la 11D) recibe 403.
+        Consultar los lugares lo pueden hacer los dos roles.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-11-04T21:00:00Z'
+            status: 403
+            error: Forbidden
+            message: No tienes permiso para realizar esta operación.
+            path: /api/v1/lugares
+    BadRequest:
+      description: >-
+        Solicitud inválida: datos del cuerpo, id que no es UUID, filtros o paginación fuera de rango, o ruta sin
+        identificador; incluye el detalle por campo en errores cuando aplica
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            datosInvalidos:
+              value:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/lugares
+                errores:
+                  - campo: nombre
+                    mensaje: no debe estar vacío
+                  - campo: capacidad
+                    mensaje: debe ser mayor que 0
+            identificadorInvalido:
+              value:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/lugares/abc
+                errores:
+                  - campo: id
+                    mensaje: debe ser un identificador válido (UUID)
+            rutaInvalida:
+              value:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 400
+                error: Bad Request
+                message: 'La ruta no es válida: falta un identificador o contiene caracteres no permitidos.'
+                path: /api/v1/lugares//estado
+    Unauthorized:
+      description: Falta el token, venció o no es válido (firma, emisor o formato). Cuerpo ErrorResponse (Fase 7).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            sinToken:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: 'Debes iniciar sesión para realizar esta operación. Envía el header Authorization: Bearer <token>.', path: /api/v1/lugares}
+            tokenVencido:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: El token venció. Inicia sesión de nuevo., path: /api/v1/lugares}
+            tokenInvalido:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: El token no es válido. Inicia sesión de nuevo., path: /api/v1/lugares}
+    NotFound:
+      description: No existe un lugar con ese id
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:54Z'
+            status: 404
+            error: Not Found
+            message: No existe un lugar con id 11111111-1111-1111-1111-111111111111
+            path: /api/v1/lugares/11111111-1111-1111-1111-111111111111
+    InternalServerError:
+      description: Error interno del servidor (mensaje neutro; el detalle queda solo en el log del servicio)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {timestamp: '2026-10-31T00:11:54Z', status: 500, error: Internal Server Error, message: Ocurrió un error interno. Intenta de nuevo más tarde., path: /api/v1/lugares}
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Formato único de error en todos los microservicios. errores solo aparece cuando hay detalles por campo.
+      required: [timestamp, status, error, message, path]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-10-31T00:11:54Z'
+        status:
+          type: integer
+          example: 400
+        error:
+          type: string
+          description: Frase estándar del código HTTP.
+          example: Bad Request
+        message:
+          type: string
+          description: Mensaje en español, entendible para la organizadora.
+          example: Los datos enviados no son válidos. Revisa los campos indicados.
+        path:
+          type: string
+          example: /api/v1/lugares
+        errores:
+          type: array
+          description: Detalle por campo (solo en errores de validación o de formato).
+          items:
+            $ref: '#/components/schemas/ErrorCampo'
+    ErrorCampo:
+      type: object
+      required: [campo, mensaje]
+      properties:
+        campo:
+          type: string
+          example: capacidad
+        mensaje:
+          type: string
+          example: debe ser mayor que 0
+    LugarRequest:
+      type: object
+      required: [nombre, direccion, tipo, capacidad]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          example: Salón de Eventos Los Ocobos
+        direccion:
+          type: string
+          minLength: 1
+          example: 'Calle 21 # 6-40, Neiva'
+        tipo:
+          type: string
+          minLength: 1
+          description: Texto libre (por ejemplo SALON, FINCA, HACIENDA).
+          example: SALON
+        capacidad:
+          type: integer
+          minimum: 1
+          description: Número máximo de invitados (adultos + niños).
+          example: 150
+    LugarResponseDTO:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 246c1c43-72c7-4d34-bafe-6beb822562e3
+        nombre:
+          type: string
+          example: Salón de Eventos Los Ocobos
+        direccion:
+          type: string
+          example: 'Calle 21 # 6-40, Neiva'
+        tipo:
+          type: string
+          example: SALON
+        capacidad:
+          type: integer
+          example: 150
+        estado:
+          $ref: '#/components/schemas/EstadoLugar'
+    EstadoLugar:
+      type: string
+      enum: [ACTIVO, INACTIVO]
+      description: Los lugares se crean ACTIVO.
+      example: ACTIVO
+    EstadoLugarRequest:
+      type: object
+      required: [estado]
+      properties:
+        estado:
+          $ref: '#/components/schemas/EstadoLugar'
+    PaginaLugar:
+      allOf:
+        - $ref: '#/components/schemas/PaginaBase'
+        - type: object
+          properties:
+            contenido:
+              type: array
+              items:
+                $ref: '#/components/schemas/LugarResponseDTO'
+    PaginaBase:
+      type: object
+      description: Página de resultados (formato propio de la API, igual en todos los listados).
+      required: [contenido, pagina, tamanoPagina, totalElementos, totalPaginas]
+      properties:
+        contenido:
+          type: array
+          items: {}
+        pagina:
+          type: integer
+          description: Número de la página devuelta (empieza en 0).
+          example: 0
+        tamanoPagina:
+          type: integer
+          description: Tamaño de página solicitado.
+          example: 10
+        totalElementos:
+          type: integer
+          format: int64
+          description: Total de elementos que cumplen el filtro.
+          example: 1
+        totalPaginas:
+          type: integer
+          description: Total de páginas.
+          example: 1

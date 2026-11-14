@@ -1,0 +1,52 @@
+# Maxi Eventos — interfaz servida por nginx (Fase 10C).
+# Es una PLANTILLA: al arrancar, el entrypoint de nginx reemplaza ${FRONTEND_GATEWAY_URL} (solo las variables FRONTEND_*,
+# por NGINX_ENVSUBST_FILTER) y la deja en /etc/nginx/conf.d/maxi-eventos.conf. Antes, 05-validar-gateway-url.sh comprueba
+# que el valor sea un origen válido (no se puede inyectar nada en la CSP ni en /config.js).
+server {
+    listen 5173;
+    server_name _;
+    root /usr/share/nginx/html;
+    server_tokens off;
+    charset utf-8;
+
+    # Cabeceras de seguridad (always = también en 404). Las locations de abajo no usan add_header, así que las heredan.
+    # CSP estricta: nada en línea (el build no tiene scripts ni estilos en línea), scripts y estilos solo del propio origen
+    # y peticiones solo al propio origen y al gateway. Protege el token de sessionStorage frente a XSS (decisión D1).
+    add_header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self' ${FRONTEND_GATEWAY_URL}; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    add_header Cross-Origin-Resource-Policy "same-origin" always;
+
+    gzip on;
+    gzip_min_length 1024;
+    gzip_types text/css application/javascript image/svg+xml;
+
+    # Configuración en tiempo de arranque (decisión D2): la URL del gateway sale de FRONTEND_GATEWAY_URL
+    location = /config.js {
+        default_type application/javascript;
+        expires -1;
+        return 200 'window.__CONFIG__ = Object.freeze({ gatewayUrl: "${FRONTEND_GATEWAY_URL}", zonaHoraria: "${FRONTEND_ZONA_HORARIA}", fechaSimulada: "${FRONTEND_FECHA_SIMULADA}" });';
+    }
+
+    # Para el healthcheck del contenedor
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 'ok';
+    }
+
+    # Archivos del build con hash en el nombre: caché larga; si no existe, 404 (nunca index.html en su lugar)
+    location /assets/ {
+        expires max;
+        try_files $uri =404;
+    }
+
+    # Aplicación de una sola página: cualquier ruta (/eventos/…, /lugares…) devuelve index.html, sin caché
+    location / {
+        expires -1;
+        try_files $uri /index.html;
+    }
+}

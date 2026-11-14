@@ -1,0 +1,465 @@
+# Maxi Eventos — Gateway GraphQL (Fase 6).
+# Base de nombres: esquema GraphQL de la Entrega 2; lo que faltaba se completó con los DTO REST reales.
+# Las equivalencias de nombres (esquema <- DTO REST) están en docs/graphql.md.
+# El gateway NO tiene lógica de negocio: cada query y cada mutation delega en el servicio REST que corresponde.
+
+scalar Date        # fecha ISO-8601 (2026-12-05)
+scalar DateTime    # fecha y hora ISO-8601 con zona (2026-10-28T15:30:00Z)
+scalar BigDecimal  # montos sin pérdida de precisión
+scalar Long        # enteros de 64 bits (totales de página, offsets de Kafka)
+
+# ---------------------------------------------------------------- enums
+enum TipoEvento { QUINCE_ANOS BODA }
+enum ZonaEvento { NEIVA RURAL }
+enum EstadoEvento { PENDIENTE RESERVADO CANCELADO }
+enum EstadoContrato { PENDIENTE FIRMADO }
+enum EstadoFecha { DISPONIBLE PENDIENTE OCUPADA }
+enum EstadoLugar { ACTIVO INACTIVO }
+enum EstadoAsignacion { PENDIENTE CONFIRMADO CANCELADO }
+enum EstadoNotificacion { GENERADA }
+enum TipoMensaje { EVENTO_CONFIRMADO PAGO_REGISTRADO SERVICIO_ADICIONAL_AGREGADO EVENTO_PROXIMO }
+"Fase 11E: ENVIADO = recordatorio nuevo (un EVENTO_PROXIMO publicado); YA_ENVIADO = ya se había enviado para ese umbral."
+enum ResultadoRecordatorio { ENVIADO YA_ENVIADO }
+enum OrigenItemCompra { CALCULADO MANUAL }
+
+# ---------------------------------------------------------------- consultas
+type Query {
+  "Ficha del evento. Cada campo relacionado consulta a su servicio SOLO si se pide. Evento inexistente: error NOT_FOUND."
+  evento(id: ID!): Evento
+  "Listado paginado (Eventos). size máximo 100. sort: fecha, fechaCreacion, tipoEvento, estado… (campo,asc|desc)."
+  eventos(estado: EstadoEvento, tipo: TipoEvento, desde: Date, hasta: Date, page: Int = 0, size: Int = 10, sort: String): PaginaEvento!
+  "Fechas en las que se puede crear un evento (libres y sin otro evento ese fin de semana). Por defecto hoy+1 .. hoy+90."
+  fechasDisponibles(desde: Date, hasta: Date): [Fecha!]!
+  "Cliente por id. Inexistente: error NOT_FOUND."
+  cliente(id: ID!): Cliente
+  "Directorio de clientes (Clientes: GET /clientes), para elegir el clienteId de crearEvento. nombre: coincidencia parcial. size máximo 100."
+  clientes(nombre: String, page: Int = 0, size: Int = 10, sort: String): PaginaCliente!
+  "Servicios adicionales que se pueden agregar a un evento (código, nombre y costo; Finanzas)."
+  catalogoServiciosAdicionales: [ServicioCatalogo!]!
+  "Catálogo de lugares (Lugares), para elegir el lugarId de asignarLugar. Filtros opcionales."
+  lugares(nombre: String, tipo: String, estado: EstadoLugar, page: Int = 0, size: Int = 10): PaginaLugar!
+  "Catálogo de proveedores (Proveedores), para elegir el proveedorId de asignarProveedor. Filtros opcionales."
+  proveedores(categoria: String, activo: Boolean, page: Int = 0, size: Int = 10): PaginaProveedor!
+  "Fase 11H (campanita). Notificaciones: GET /notificaciones/recientes. Todas las de todos los eventos, más recientes primero, con si el usuario del token ya la leyó. size máximo 100."
+  misNotificaciones(page: Int = 0, size: Int = 10): PaginaMiNotificacion!
+  "Fase 11H. Notificaciones: GET /notificaciones/sin-leer. Cuántas no ha leído el usuario del token (las lecturas son por usuario)."
+  notificacionesSinLeer: Int!
+}
+
+# ---------------------------------------------------------------- mutations (todas delegan en REST)
+type Mutation {
+  "Auth: POST /auth/login. Devuelve el token que se envía como 'Authorization: Bearer <token>'."
+  login(correo: String!, password: String!): AuthPayload!
+  "Clientes: POST /clientes."
+  crearCliente(input: ClienteInput!): Cliente!
+  "Eventos: POST /eventos (queda PENDIENTE y la fecha también)."
+  crearEvento(input: CrearEventoInput!): Evento!
+  "Finanzas: POST /cotizaciones. Si el evento ya tenía cotización, devuelve la existente."
+  generarCotizacion(eventoId: ID!): Cotizacion!
+  "Contratos: POST /eventos/{eventoId}/contrato (PENDIENTE). Si ya existía, devuelve el existente."
+  crearContrato(eventoId: ID!): Contrato!
+  "Contratos: PATCH /eventos/{eventoId}/contrato/marcar-firmado."
+  firmarContrato(eventoId: ID!): Contrato!
+  "Finanzas: POST /finanzas/pagos (claveIdempotencia -> cabecera X-Idempotency-Key)."
+  registrarPago(input: PagoInput!): Pago!
+  "Eventos: PATCH /eventos/{id}/confirmar (contrato FIRMADO y abono >= depósito)."
+  confirmarEvento(id: ID!): Evento!
+  "Eventos: PATCH /eventos/{id}/cancelar."
+  cancelarEvento(id: ID!): Evento!
+  "Finanzas: POST /eventos/{eventoId}/adicionales (códigos en catalogoServiciosAdicionales)."
+  agregarServicioAdicional(eventoId: ID!, codigo: String!, cantidad: Int!): ServicioAdicional!
+  "Eventos: PATCH /eventos/{id}/lugar."
+  asignarLugar(eventoId: ID!, lugarId: ID!): Evento!
+  "Proveedores: POST /proveedores/eventos."
+  asignarProveedor(input: AsignarProveedorInput!): ProveedorAsignado!
+  "Proveedores: PATCH /proveedores/eventos/asignaciones/{id}/estado. Solo se permite PENDIENTE → CONFIRMADO (otro cambio: CONFLICT)."
+  cambiarEstadoAsignacion(id: ID!, estado: EstadoAsignacion!): ProveedorAsignado!
+  "Logística: PUT /eventos/{eventoId}/compras (marca ítems como comprados o pendientes). Devuelve la lista ya actualizada. Un ítem de otro evento: NOT_FOUND."
+  actualizarCompras(eventoId: ID!, items: [ItemCompraInput!]!, page: Int = 0, size: Int = 100): PaginaItemCompra!
+  "Logística: POST /eventos/{eventoId}/compras. Agrega un ítem MANUAL (sin marcar). Nombre repetido en el evento: CONFLICT; evento sin logística: NOT_FOUND."
+  agregarItemCompra(eventoId: ID!, input: ItemCompraDatosInput!): ItemCompra!
+  "Logística: PUT /eventos/{eventoId}/compras/{itemId}. Edita nombre, cantidad y nota (calculado o manual); conserva el origen y la marca."
+  editarItemCompra(eventoId: ID!, itemId: ID!, input: ItemCompraDatosInput!): ItemCompra!
+  "Logística: DELETE /eventos/{eventoId}/compras/{itemId}. Solo ítems MANUAL (un CALCULADO: CONFLICT). Devuelve el id quitado."
+  quitarItemCompra(eventoId: ID!, itemId: ID!): ID!
+  "Lugares: POST /lugares (queda ACTIVO). Datos inválidos: BAD_REQUEST con errores[] por campo."
+  crearLugar(input: LugarInput!): Lugar!
+  "Lugares: PUT /lugares/{id} (no cambia el estado). Inexistente: NOT_FOUND."
+  actualizarLugar(id: ID!, input: LugarInput!): Lugar!
+  "Lugares: PATCH /lugares/{id}/estado (ACTIVO o INACTIVO; un lugar INACTIVO no se puede asignar a eventos)."
+  cambiarEstadoLugar(id: ID!, estado: EstadoLugar!): Lugar!
+  "Proveedores: POST /proveedores (queda activo). Nombre repetido (sin distinguir mayúsculas): CONFLICT."
+  crearProveedor(input: ProveedorInput!): Proveedor!
+  "Proveedores: PUT /proveedores/{id} (no cambia el estado). Nombre de otro proveedor: CONFLICT. Inexistente: NOT_FOUND."
+  actualizarProveedor(id: ID!, input: ProveedorInput!): Proveedor!
+  "Proveedores: PATCH /proveedores/{id}/estado (un proveedor inactivo no se puede asignar a eventos)."
+  cambiarEstadoProveedor(id: ID!, activo: Boolean!): Proveedor!
+  "Fase 11E. Eventos: POST /recordatorios/ejecutar. Revisa ya los eventos RESERVADOS próximos y envía los recordatorios EVENTO_PROXIMO que falten (sin repetir los ya enviados). Solo ADMINISTRADOR (otro rol: FORBIDDEN)."
+  ejecutarRecordatorios: ResultadoRecordatorios!
+  "Fase 11H. Notificaciones: PATCH /notificaciones/{id}/leida. La marca como leída para el usuario del token (si ya lo estaba, no cambia). Inexistente: NOT_FOUND."
+  marcarNotificacionLeida(id: ID!): MiNotificacion!
+  "Fase 11H. Notificaciones: PATCH /notificaciones/leidas. Marca todas como leídas para el usuario del token; devuelve cuántas se marcaron ahora."
+  marcarTodasNotificacionesLeidas: Int!
+}
+
+# ---------------------------------------------------------------- tipos principales
+type Evento {
+  id: ID!
+  nombreEvento: String!
+  fecha: Date!
+  tipoEvento: TipoEvento!
+  numInvitados: Int!
+  cantidadAdultos: Int!
+  cantidadNinos: Int!
+  zona: ZonaEvento!
+  estado: EstadoEvento!
+  fechaCreacion: DateTime
+  clienteId: ID!
+  lugarId: ID
+  # Relaciones: cada una se resuelve con una llamada a su servicio solo si se pide.
+  "Clientes."
+  cliente: Cliente
+  "Finanzas. null si el evento aún no tiene cotización."
+  cotizacion: Cotizacion
+  "Contratos. null si el evento aún no tiene contrato."
+  contrato: Contrato
+  "Finanzas (abonos)."
+  pagos(page: Int = 0, size: Int = 10): PaginaPago
+  "Finanzas. null si el evento aún no tiene cotización."
+  balance: Balance
+  "Lugares. null si el evento no tiene lugar asignado (no se llama a Lugares)."
+  lugar: Lugar
+  "Proveedores asignados al evento."
+  proveedores(page: Int = 0, size: Int = 10): PaginaProveedorAsignado
+  "Finanzas: servicios extra contratados después de la cotización inicial."
+  serviciosAdicionales: [ServicioAdicional!]
+  "Logística. null hasta que el evento se confirma (la calcula el consumidor Kafka)."
+  logistica: Logistica
+  "Notificaciones simuladas generadas por Kafka (EVENTO_CONFIRMADO, PAGO_REGISTRADO y, desde la 11E, EVENTO_PROXIMO)."
+  notificaciones(page: Int = 0, size: Int = 10): PaginaNotificacion
+  "Mensajes Kafka del evento registrados por Auditoría."
+  auditoria(tipo: TipoMensaje, page: Int = 0, size: Int = 10): PaginaAuditoria
+}
+
+type Cliente {
+  "Identificación del cliente."
+  id: ID!
+  nombreCompleto: String!
+  telefono: String!
+  correo: String!
+  direccion: String
+}
+
+type Cotizacion {
+  id: ID!
+  eventoId: ID!
+  "Valor base de la tarifa (incluye el cupo de invitados)."
+  valorBase: BigDecimal!
+  "Total de la cotización SIN servicios adicionales."
+  totalSinAdicionales: BigDecimal!
+  "Total INCLUYENDO los servicios adicionales (lo calcula Finanzas en el balance; se consulta solo si se pide)."
+  total: BigDecimal
+  "Depósito inicial requerido para confirmar el evento."
+  depositoInicialRequerido: BigDecimal
+  moneda: String!
+  tipoEvento: TipoEvento
+  zona: ZonaEvento
+  invitados: Int!
+  cantidadAdultos: Int
+  cantidadNinos: Int
+  adultosAdicionales: Int
+  ninosAdicionales: Int
+  valorAdultosAdicionales: BigDecimal
+  valorNinosAdicionales: BigDecimal
+  subtotal: BigDecimal
+  recargoZona: BigDecimal
+  creadoEn: DateTime
+}
+
+type Contrato {
+  id: ID!
+  eventoId: ID!
+  estado: EstadoContrato!
+  "Fecha de firma (null mientras está PENDIENTE)."
+  fechaFirma: DateTime
+  nombreEvento: String
+  creadoEn: DateTime
+  "Ruta REST del PDF del contrato."
+  urlDocumento: String
+  # Foto de los datos del evento al crear el contrato
+  clienteNombre: String
+  fechaEvento: Date
+  tipoEvento: TipoEvento
+  cantidadAdultos: Int
+  cantidadNinos: Int
+  lugarNombre: String
+  valorTotal: BigDecimal
+  moneda: String
+}
+
+type Pago {
+  id: ID!
+  eventoId: ID!
+  clienteId: ID!
+  monto: BigDecimal!
+  "Fecha del abono."
+  fecha: DateTime
+  moneda: String!
+  metodoPago: String!
+  estado: String
+  claveIdempotencia: String
+}
+
+type Balance {
+  eventoId: ID!
+  "Total cotizado, incluyendo los servicios adicionales."
+  totalCotizado: BigDecimal!
+  "Monto abonado."
+  montoAbonado: BigDecimal!
+  saldoPendiente: BigDecimal!
+  "Total de la cotización sin adicionales."
+  valorCotizacion: BigDecimal!
+  "Suma de los servicios adicionales."
+  adicionales: BigDecimal!
+  depositoInicialRequerido: BigDecimal
+  moneda: String
+}
+
+type Lugar {
+  id: ID!
+  nombre: String!
+  direccion: String
+  tipo: String
+  capacidad: Int
+  estado: EstadoLugar
+}
+
+type ProveedorAsignado {
+  id: ID!
+  eventoId: ID!
+  proveedorId: ID!
+  "Servicio específico que el proveedor presta en el evento."
+  servicio: String!
+  "Categoría del proveedor (Proveedores; se consulta solo si se pide)."
+  categoria: String
+  costoAcordado: BigDecimal!
+  estado: EstadoAsignacion
+  "Datos del proveedor (Proveedores; se consulta solo si se pide)."
+  proveedor: Proveedor
+}
+
+type Proveedor {
+  id: ID!
+  nombre: String!
+  categoria: String
+  contacto: String
+  activo: Boolean!
+}
+
+type ServicioAdicional {
+  id: ID!
+  eventoId: ID!
+  codigo: String!
+  nombre: String!
+  cantidad: Int!
+  valorUnitario: BigDecimal!
+  subtotal: BigDecimal!
+  fecha: DateTime
+}
+
+type ServicioCatalogo {
+  codigo: String!
+  nombre: String!
+  costoUnitario: BigDecimal!
+  moneda: String
+}
+
+type Logistica {
+  eventoId: ID!
+  "Cantidad de meseros."
+  meseros: Int
+  "Personal de cocina."
+  personalCocina: Int
+  "Vehículos (camiones de transporte)."
+  vehiculos: Int
+  "Lista de compras e insumos (Logística; se consulta solo si se pide)."
+  compras(page: Int = 0, size: Int = 20): PaginaItemCompra
+}
+
+type ItemCompra {
+  id: ID!
+  nombreItem: String!
+  "Cantidad o descripción (texto): '11 bolsas', 'una por mesa'…"
+  cantidadEstimada: String
+  comprado: Boolean!
+  "10B3: CALCULADO (lo generó el sistema al confirmar) o MANUAL (lo agregó la organizadora; solo estos se pueden quitar)."
+  origen: OrigenItemCompra
+  "10B3: nota opcional."
+  nota: String
+}
+
+type Fecha {
+  fecha: Date!
+  diaSemana: String!
+  estado: EstadoFecha!
+  eventoId: ID
+}
+
+type Notificacion {
+  id: ID!
+  idEvento: ID!
+  eventoId: ID!
+  tipo: TipoMensaje!
+  destinatario: String!
+  asunto: String!
+  mensaje: String!
+  estado: EstadoNotificacion!
+  fechaCreacion: DateTime
+}
+
+"Fase 11H: una notificación vista por el usuario del token (campanita). leida / leidaEn son de ESE usuario; fechaCreacion = cuándo se recibió."
+type MiNotificacion {
+  id: ID!
+  idEvento: ID!
+  eventoId: ID!
+  tipo: TipoMensaje!
+  destinatario: String!
+  asunto: String!
+  mensaje: String!
+  estado: EstadoNotificacion!
+  fechaCreacion: DateTime
+  leida: Boolean!
+  leidaEn: DateTime
+  "Eventos (solo si se pide): una llamada por evento distinto de la página (@BatchMapping). null si el evento ya no existe."
+  evento: Evento
+}
+
+type RegistroAuditoria {
+  idEvento: ID!
+  tipo: TipoMensaje!
+  eventoId: ID!
+  servicioOrigen: String
+  "Sobre del mensaje Kafka, en JSON, tal como llegó del tópico."
+  payload: String!
+  topico: String!
+  particion: Int!
+  offset: Long!
+  fechaOcurrencia: DateTime
+  fechaRecepcion: DateTime
+}
+
+type AuthPayload {
+  token: String!
+  tipoToken: String!
+  expiracionEnSegundos: Long!
+  "Fase 11D: nombre del usuario (para la interfaz; NO viaja en el token)."
+  nombre: String!
+  "Fase 11D: rol del usuario (también va en el claim rol del token)."
+  rol: Rol!
+}
+
+"Fase 11E: resultado de una revisión de recordatorios. revisados = RESERVADOS entre mañana y el umbral mayor; enviados = nuevos; yaEnviados = no repetidos."
+type ResultadoRecordatorios {
+  ejecutadoEn: DateTime!
+  hoy: Date!
+  umbralesDias: [Int!]!
+  revisados: Int!
+  enviados: Int!
+  yaEnviados: Int!
+  recordatorios: [Recordatorio!]!
+}
+
+type Recordatorio {
+  eventoId: ID!
+  nombreEvento: String!
+  fecha: Date!
+  diasRestantes: Int!
+  umbralDias: Int!
+  resultado: ResultadoRecordatorio!
+}
+
+"Fase 11D: ADMINISTRADOR = todos los permisos; ASISTENTE = clientes y el flujo de los eventos, sin administrar lugares, proveedores, el bloqueo de fechas ni la auditoría (matriz en docs/seguridad.md)."
+enum Rol {
+  ADMINISTRADOR
+  ASISTENTE
+}
+
+# ---------------------------------------------------------------- páginas (mismo formato que PaginaResponse de los servicios)
+type PaginaEvento { contenido: [Evento!]! pagina: Int! tamanoPagina: Int! totalElementos: Long! totalPaginas: Int! }
+type PaginaPago { contenido: [Pago!]! pagina: Int! tamanoPagina: Int! totalElementos: Long! totalPaginas: Int! }
+type PaginaProveedorAsignado { contenido: [ProveedorAsignado!]! pagina: Int! tamanoPagina: Int! totalElementos: Long! totalPaginas: Int! }
+type PaginaItemCompra { contenido: [ItemCompra!]! pagina: Int! tamanoPagina: Int! totalElementos: Long! totalPaginas: Int! }
+type PaginaNotificacion { contenido: [Notificacion!]! pagina: Int! tamanoPagina: Int! totalElementos: Long! totalPaginas: Int! }
+type PaginaMiNotificacion { contenido: [MiNotificacion!]! pagina: Int! tamanoPagina: Int! totalElementos: Long! totalPaginas: Int! }
+type PaginaAuditoria { contenido: [RegistroAuditoria!]! pagina: Int! tamanoPagina: Int! totalElementos: Long! totalPaginas: Int! }
+type PaginaLugar { contenido: [Lugar!]! pagina: Int! tamanoPagina: Int! totalElementos: Long! totalPaginas: Int! }
+type PaginaProveedor { contenido: [Proveedor!]! pagina: Int! tamanoPagina: Int! totalElementos: Long! totalPaginas: Int! }
+type PaginaCliente { contenido: [Cliente!]! pagina: Int! tamanoPagina: Int! totalElementos: Long! totalPaginas: Int! }
+
+# ---------------------------------------------------------------- inputs (los valida el servicio REST: un 400 llega con extensions.errores)
+input ClienteInput {
+  nombreCompleto: String!
+  telefono: String!
+  correo: String!
+  direccion: String
+}
+
+input CrearEventoInput {
+  nombreEvento: String!
+  clienteId: ID!
+  fecha: Date!
+  tipoEvento: TipoEvento!
+  cantidadAdultos: Int!
+  cantidadNinos: Int!
+  zona: ZonaEvento!
+  lugarId: ID
+}
+
+input PagoInput {
+  eventoId: ID!
+  clienteId: ID!
+  monto: BigDecimal!
+  moneda: String = "COP"
+  metodoPago: String!
+  "Opcional: misma clave = mismo pago (no se cobra dos veces)."
+  claveIdempotencia: String
+}
+
+"Un ítem de la lista de compras de logística y su nuevo estado."
+input ItemCompraInput {
+  id: ID!
+  comprado: Boolean!
+}
+
+"Datos de un ítem de la lista de compras (agregar o editar; 10B3). Se envían tal cual a logistica-service, que los valida (nombre ≤ 120 y cantidad ≤ 80 obligatorios; nota ≤ 255)."
+input ItemCompraDatosInput {
+  nombreItem: String!
+  cantidadEstimada: String!
+  nota: String
+}
+
+"Datos de un lugar (crear o actualizar). Se envían tal cual a lugares-service, que los valida (todos obligatorios, capacidad > 0)."
+input LugarInput {
+  nombre: String!
+  direccion: String!
+  "SALON, FINCA, HACIENDA, KIOSCO…"
+  tipo: String!
+  "Admite null para que lugares-service responda el error en el campo capacidad (BAD_REQUEST con errores[])."
+  capacidad: Int
+}
+
+"Datos de un proveedor (crear o actualizar). Se envían tal cual a proveedores-service, que los valida (todos obligatorios)."
+input ProveedorInput {
+  nombre: String!
+  "SONIDO, BANQUETES, FLORISTERIA, FOTOGRAFIA, DECORACION…"
+  categoria: String!
+  contacto: String!
+}
+
+input AsignarProveedorInput {
+  eventoId: ID!
+  proveedorId: ID!
+  servicio: String!
+  costoAcordado: BigDecimal!
+  estado: EstadoAsignacion
+}

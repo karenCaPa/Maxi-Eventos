@@ -1,0 +1,1038 @@
+openapi: 3.0.3
+info:
+  title: Maxi Eventos - Finanzas Service
+  description: |
+    Cotización del evento (tarifas de la configuración), abonos con idempotencia, balance y servicios adicionales.
+    Publica PAGO_REGISTRADO (pagos.registrados) y SERVICIO_ADICIONAL_AGREGADO (servicios-adicionales.agregados)
+    después del commit, con outbox en finanzas_mensajes_salientes.
+
+    **Reto de la semana 8** (validación + error de negocio, documentados aquí y verificados con pruebas automáticas y
+    Postman), en POST /finanzas/pagos:
+    - Validación: un abono en una moneda distinta a la de la cotización → **400** con `errores[]` en el campo `moneda`
+      (ejemplo `retoMonedaDistinta`).
+    - Error de negocio: un abono mayor que el saldo pendiente → **409** con el saldo en el mensaje
+      (ejemplo `retoMontoMayorQueElSaldo`).
+  version: 1.0.0
+servers:
+  - url: http://localhost:8084/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /finanzas/health:
+    get:
+      operationId: healthFinanzas
+      summary: Consultar el estado básico del servicio (exige token; el health público es /actuator/health)
+      responses:
+        '200':
+          description: Estado del servicio
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: finanzas-service ok
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /finanzas/pagos:
+    post:
+      operationId: registrarPago
+      summary: Registrar un abono y publicar PAGO_REGISTRADO después del commit
+      description: |
+        Valida contra eventos-service (con el mismo token) que el evento exista (404) y no esté CANCELADO (409), y que
+        clienteId sea el del evento (400). Exige cotización (409), moneda igual a la de la cotización (400) y que el monto
+        no supere el saldo pendiente = total de la cotización + adicionales − abonado (409). Mientras se calcula el saldo
+        y se guarda el pago, la cotización del evento queda bloqueada: dos abonos simultáneos no superan juntos el saldo.
+
+        Idempotencia en PostgreSQL (columna clave_idempotencia UNIQUE): la clave es eventIdempotencia del cuerpo o la
+        cabecera X-Idempotency-Key (si vienen ambas deben coincidir); si no se envía, se genera una. Repetir la misma
+        clave con los mismos datos devuelve 200 con el pago ya registrado; con otros datos (evento, cliente o monto) → 409.
+
+        PAGO_REGISTRADO se publica en el tópico pagos.registrados DESPUÉS del commit, con el sobre común
+        (idEvento, tipo, version, fechaOcurrencia, servicioOrigen, eventoId, datos) y clave = eventoId.
+
+        Reto de la semana 8: moneda distinta → 400 en el campo moneda (prueba
+        FinanzasApiIntegracionTest.Pagos.monedaDistintaALaDeLaCotizacion400EnElCampo); monto mayor que el saldo → 409
+        (prueba FinanzasApiIntegracionTest.Pagos.montoMayorQueElSaldo409).
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          description: Clave de idempotencia (máximo 100 caracteres).
+          schema:
+            type: string
+            maxLength: 100
+            example: afed9d5e-3124-46b4-a0d1-2c95cf17198c
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PagoRequest'
+            examples:
+              abono:
+                summary: Primer abono de la reserva de Quince años de Lucía
+                value:
+                  eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                  clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                  metodoPago: TRANSFERENCIA
+                  monto: 1044000
+                  moneda: COP
+              retoMonedaDistinta:
+                summary: 'Reto semana 8 (validación): moneda distinta a la de la cotización → 400'
+                value:
+                  eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                  clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                  metodoPago: TRANSFERENCIA
+                  monto: 500000
+                  moneda: USD
+              retoMontoMayorQueElSaldo:
+                summary: 'Reto semana 8 (negocio): monto mayor que el saldo pendiente (6.270.000 COP) → 409'
+                value:
+                  eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                  clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                  metodoPago: TRANSFERENCIA
+                  monto: 7000000
+                  moneda: COP
+      responses:
+        '201':
+          description: Pago nuevo registrado
+          headers:
+            X-Idempotency-Key:
+              $ref: '#/components/headers/IdempotencyKey'
+            Location:
+              description: URL de los pagos del evento (/api/v1/eventos/{eventoId}/pagos).
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagoResponse'
+              example:
+                pagoId: 438df9f8-1240-452d-bc4c-966003c8db15
+                estado: PAGADO
+                eventIdempotencia: afed9d5e-3124-46b4-a0d1-2c95cf17198c
+                eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                monto: 1044000.00
+                moneda: COP
+                metodoPago: TRANSFERENCIA
+                creadoEn: '2026-10-30T23:59:38.853017Z'
+        '200':
+          description: Repetición con la misma clave y los mismos datos; se devuelve el pago ya registrado
+          headers:
+            X-Idempotency-Key:
+              $ref: '#/components/headers/IdempotencyKey'
+            X-Already-Processed:
+              $ref: '#/components/headers/AlreadyProcessed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagoResponse'
+              example:
+                pagoId: 438df9f8-1240-452d-bc4c-966003c8db15
+                estado: PAGADO
+                eventIdempotencia: afed9d5e-3124-46b4-a0d1-2c95cf17198c
+                eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                monto: 1044000.00
+                moneda: COP
+                metodoPago: TRANSFERENCIA
+                creadoEn: '2026-10-30T23:59:38.853017Z'
+        '400':
+          description: >-
+            Datos inválidos. Incluye el caso de VALIDACIÓN del reto de la semana 8: moneda distinta a la de la cotización
+            (errores[] con el campo moneda). También clienteId que no es el del evento, o clave de idempotencia inválida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                retoMonedaDistinta:
+                  summary: 'Reto semana 8: moneda distinta → 400 en el campo moneda'
+                  value:
+                    timestamp: '2026-10-31T00:11:54Z'
+                    status: 400
+                    error: Bad Request
+                    message: debe ser COP, la moneda de la cotización
+                    path: /api/v1/finanzas/pagos
+                    errores:
+                      - campo: moneda
+                        mensaje: debe ser COP, la moneda de la cotización
+                datosInvalidos:
+                  value:
+                    timestamp: '2026-10-31T00:11:55Z'
+                    status: 400
+                    error: Bad Request
+                    message: Los datos enviados no son válidos. Revisa los campos indicados.
+                    path: /api/v1/finanzas/pagos
+                    errores:
+                      - campo: metodoPago
+                        mensaje: no debe estar vacío
+                      - campo: monto
+                        mensaje: debe ser mayor que 0
+                      - campo: moneda
+                        mensaje: no debe estar vacío
+                clienteDeOtroEvento:
+                  value:
+                    timestamp: '2026-10-31T00:11:55Z'
+                    status: 400
+                    error: Bad Request
+                    message: no corresponde al cliente del evento
+                    path: /api/v1/finanzas/pagos
+                    errores:
+                      - campo: clienteId
+                        mensaje: no corresponde al cliente del evento
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/EventoNoEncontrado'
+        '409':
+          description: >-
+            Conflicto de negocio. Incluye el ERROR DE NEGOCIO del reto de la semana 8: monto mayor que el saldo pendiente
+            (el mensaje indica el saldo). También: evento CANCELADO, sin cotización, ya pagado o clave de idempotencia
+            usada con otros datos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                retoMontoMayorQueElSaldo:
+                  summary: 'Reto semana 8: monto mayor que el saldo → 409 con el saldo en el mensaje'
+                  value:
+                    timestamp: '2026-10-31T00:11:55Z'
+                    status: 409
+                    error: Conflict
+                    message: El monto 7000000 supera el saldo pendiente de 6270000.00 COP.
+                    path: /api/v1/finanzas/pagos
+                eventoCancelado:
+                  value:
+                    timestamp: '2026-10-31T00:11:55Z'
+                    status: 409
+                    error: Conflict
+                    message: El evento está CANCELADO y no admite abonos.
+                    path: /api/v1/finanzas/pagos
+                sinCotizacion:
+                  value:
+                    timestamp: '2026-10-31T00:11:55Z'
+                    status: 409
+                    error: Conflict
+                    message: El evento no tiene cotización. Genera la cotización antes de registrar abonos.
+                    path: /api/v1/finanzas/pagos
+                yaPagado:
+                  value:
+                    timestamp: '2026-10-31T00:11:55Z'
+                    status: 409
+                    error: Conflict
+                    message: El evento ya está pagado por completo; no admite más abonos.
+                    path: /api/v1/finanzas/pagos
+                claveRepetida:
+                  value:
+                    timestamp: '2026-10-31T00:11:55Z'
+                    status: 409
+                    error: Conflict
+                    message: La clave de idempotencia afed9d5e-3124-46b4-a0d1-2c95cf17198c ya se usó para otro pago con datos distintos.
+                    path: /api/v1/finanzas/pagos
+        '503':
+          $ref: '#/components/responses/EventosNoDisponible'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /eventos/{eventoId}/pagos:
+    get:
+      operationId: listarPagosDeEvento
+      summary: Listar los abonos de un evento (paginado)
+      description: >-
+        Valida contra eventos-service que el evento exista: 404 si no existe; página vacía si no tiene pagos; 503 si
+        eventos-service no responde. Campos para sort: creadoEn, monto, metodoPago (por defecto creadoEn,asc). No se cachea.
+      parameters:
+        - $ref: '#/components/parameters/eventoId'
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+        - $ref: '#/components/parameters/sort'
+      responses:
+        '200':
+          description: Página de pagos del evento (vacía si no tiene)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginaPago'
+              example:
+                contenido:
+                  - pagoId: 438df9f8-1240-452d-bc4c-966003c8db15
+                    estado: PAGADO
+                    eventIdempotencia: afed9d5e-3124-46b4-a0d1-2c95cf17198c
+                    eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                    clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                    monto: 1044000.00
+                    moneda: COP
+                    metodoPago: TRANSFERENCIA
+                    creadoEn: '2026-10-30T23:59:38.853017Z'
+                  - pagoId: 29b695d1-f364-483e-8531-7fe34c599e65
+                    estado: PAGADO
+                    eventIdempotencia: 63be1cd4-1916-4fc7-a79b-18aef582bb4e
+                    eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                    clienteId: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                    monto: 1566000.00
+                    moneda: COP
+                    metodoPago: EFECTIVO
+                    creadoEn: '2026-10-30T23:59:39.205038Z'
+                pagina: 0
+                tamanoPagina: 10
+                totalElementos: 2
+                totalPaginas: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/EventoNoEncontrado'
+        '503':
+          $ref: '#/components/responses/EventosNoDisponible'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /cotizaciones:
+    post:
+      operationId: crearCotizacion
+      summary: Cotizar un evento con sus datos de eventos-service
+      description: |
+        Solo se envía eventoId: tipoEvento, zona, cantidadAdultos y cantidadNinos se consultan a eventos-service (con el
+        mismo token). Los campos antiguos invitados y zona se aceptan y se ignoran.
+
+        Cálculo (tarifas de la configuración, valores de ejemplo con TODO valor real):
+        subtotal = valor base + adultos adicionales × valor adulto + niños adicionales × valor niño;
+        recargoZona = subtotal × recargo-rural (solo RURAL); total = subtotal + recargoZona;
+        montoReservaRequerido = total × porcentaje de reserva. Los invitados adicionales dependen del modo del cupo
+        (SEPARADO: adultos y niños con cupos propios; UNICO: un cupo que cubre primero a los adultos).
+
+        La cotización no se regenera: si el evento ya tiene cotización se devuelve la existente (200) sin consultar a
+        eventos-service. Solo se cotiza un evento PENDIENTE (409 si no).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CotizacionRequest'
+            example:
+              eventoId: 633930f6-534f-4687-96c7-e853be0c3389
+      responses:
+        '201':
+          description: Cotización creada
+          headers:
+            Location:
+              description: URL de la cotización del evento (/api/v1/eventos/{eventoId}/cotizacion).
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CotizacionResponseDTO'
+              examples:
+                bodaRural:
+                  $ref: '#/components/examples/CotizacionBodaRural'
+        '200':
+          description: El evento ya tenía cotización; se devuelve la existente sin modificarla
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CotizacionResponseDTO'
+              examples:
+                quinceNeiva:
+                  $ref: '#/components/examples/CotizacionQuinceNeiva'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: El evento no existe en eventos-service
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 404
+                error: Not Found
+                message: No existe un evento con id 11111111-1111-1111-1111-111111111111
+                path: /api/v1/cotizaciones
+        '409':
+          description: El evento no está PENDIENTE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 409
+                error: Conflict
+                message: Solo se puede cotizar un evento PENDIENTE; el evento está CANCELADO.
+                path: /api/v1/cotizaciones
+        '503':
+          $ref: '#/components/responses/EventosNoDisponible'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /eventos/{eventoId}/cotizacion:
+    get:
+      operationId: obtenerCotizacion
+      summary: Obtener la cotización de un evento
+      parameters:
+        - $ref: '#/components/parameters/eventoId'
+      responses:
+        '200':
+          description: Cotización encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CotizacionResponseDTO'
+              examples:
+                quinceNeiva:
+                  $ref: '#/components/examples/CotizacionQuinceNeiva'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/SinCotizacion'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /eventos/{eventoId}/balance:
+    get:
+      operationId: obtenerBalance
+      summary: Obtener el balance financiero de un evento
+      description: Total = cotización + adicionales; saldoPendiente = total − totalAbonado. Lo consulta eventos-service al confirmar.
+      parameters:
+        - $ref: '#/components/parameters/eventoId'
+      responses:
+        '200':
+          description: Desglose financiero
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Balance'
+              example:
+                eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                valorBase: 8700000.00
+                adicionales: 180000.00
+                totalAbonado: 2610000.00
+                saldoPendiente: 6270000.00
+                total: 8880000.00
+                montoReservaRequerido: 2610000.00
+                moneda: COP
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/SinCotizacion'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /servicios-adicionales:
+    get:
+      operationId: listarServiciosAdicionales
+      summary: Consultar el catálogo de servicios adicionales
+      description: Se calcula en memoria desde la configuración (valores de ejemplo con TODO valor real); no se cachea.
+      responses:
+        '200':
+          description: Catálogo de adicionales
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdicionalCatalogo'
+              example:
+                - codigo: transporte-adicional
+                  nombre: Transporte adicional
+                  costoUnitario: 180000
+                  moneda: COP
+                - codigo: decoracion-premium
+                  nombre: Decoración premium
+                  costoUnitario: 250000
+                  moneda: COP
+                - codigo: hora-extra
+                  nombre: Hora adicional de servicio
+                  costoUnitario: 120000
+                  moneda: COP
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /eventos/{eventoId}/adicionales:
+    get:
+      operationId: listarAdicionalesDeEvento
+      summary: Listar los servicios adicionales de un evento
+      description: >-
+        En el orden en que se agregaron (los usa el anexo de contratos-service). 404 si el evento no existe (validado
+        contra eventos-service); lista vacía si no tiene adicionales; 503 si eventos-service no responde.
+      parameters:
+        - $ref: '#/components/parameters/eventoId'
+      responses:
+        '200':
+          description: Adicionales del evento (vacía si no tiene)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdicionalEventoResponseDTO'
+              example:
+                - id: 6a5f7f1a-542c-4f32-a51e-0aef5ec8f084
+                  eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                  codigo: transporte-adicional
+                  nombre: Transporte adicional
+                  cantidad: 1
+                  valorUnitario: 180000.00
+                  subtotal: 180000.00
+                  creadoEn: '2026-10-30T23:59:42.696607Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/EventoNoEncontrado'
+        '503':
+          $ref: '#/components/responses/EventosNoDisponible'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      operationId: agregarServicioAdicional
+      summary: Agregar un adicional a un evento y publicar SERVICIO_ADICIONAL_AGREGADO después del commit
+      description: |
+        Requiere cotización (404 si no hay). El mensaje SERVICIO_ADICIONAL_AGREGADO se publica en el tópico
+        servicios-adicionales.agregados DESPUÉS del commit, con el sobre común y clave = eventoId. Si Kafka no está
+        disponible, el adicional queda registrado igualmente (201) y el outbox lo publica cuando Kafka vuelve.
+      parameters:
+        - $ref: '#/components/parameters/eventoId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdicionalRequest'
+            example:
+              codigo: transporte-adicional
+              cantidad: 1
+      responses:
+        '201':
+          description: Adicional agregado
+          headers:
+            Location:
+              description: URL de los adicionales del evento (/api/v1/eventos/{eventoId}/adicionales).
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdicionalEventoResponseDTO'
+              example:
+                id: 6a5f7f1a-542c-4f32-a51e-0aef5ec8f084
+                eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                codigo: transporte-adicional
+                nombre: Transporte adicional
+                cantidad: 1
+                valorUnitario: 180000.00
+                subtotal: 180000.00
+                creadoEn: '2026-10-30T23:59:42.696607Z'
+        '400':
+          description: Código que no está en el catálogo o cantidad menor que 1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 400
+                error: Bad Request
+                message: no existe en el catálogo de servicios adicionales
+                path: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/adicionales
+                errores:
+                  - campo: codigo
+                    mensaje: no existe en el catálogo de servicios adicionales
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: El evento no tiene cotización
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 404
+                error: Not Found
+                message: No existe una cotización para el evento 406ea893-c467-4561-a03f-ebec8d569cce. Genera la cotización antes de agregar servicios adicionales.
+                path: /api/v1/eventos/406ea893-c467-4561-a03f-ebec8d569cce/adicionales
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  examples:
+    CotizacionQuinceNeiva:
+      summary: Quince años de Lucía (90 adultos y 15 niños, NEIVA)
+      value:
+        id: 805bfba3-ac03-4b88-903b-55bee150c1f0
+        eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+        invitados: 105
+        zona: NEIVA
+        valorBase: 8000000.00
+        recargoZona: 0.00
+        total: 8700000.00
+        montoReservaRequerido: 2610000.00
+        moneda: COP
+        creadoEn: '2026-10-30T23:59:37.910058Z'
+        tipoEvento: QUINCE_ANOS
+        cantidadAdultos: 90
+        cantidadNinos: 15
+        adultosAdicionales: 10
+        ninosAdicionales: 0
+        valorAdultosAdicionales: 700000.00
+        valorNinosAdicionales: 0.00
+        subtotal: 8700000.00
+    CotizacionBodaRural:
+      summary: Boda de Andrés y Camila (120 adultos y 10 niños, RURAL con recargo del 10 %)
+      value:
+        id: 38b3dc01-9e0d-4e57-b59e-15901781b288
+        eventoId: 633930f6-534f-4687-96c7-e853be0c3389
+        invitados: 130
+        zona: RURAL
+        valorBase: 12000000.00
+        recargoZona: 1380000.00
+        total: 15180000.00
+        montoReservaRequerido: 4554000.00
+        moneda: COP
+        creadoEn: '2026-10-30T23:59:45.602045Z'
+        tipoEvento: BODA
+        cantidadAdultos: 120
+        cantidadNinos: 10
+        adultosAdicionales: 20
+        ninosAdicionales: 0
+        valorAdultosAdicionales: 1800000.00
+        valorNinosAdicionales: 0.00
+        subtotal: 13800000.00
+  parameters:
+    eventoId:
+      name: eventoId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+        example: af79495b-9065-4b83-b08e-83ca7edabc5a
+    page:
+      name: page
+      in: query
+      required: false
+      description: Número de página (empieza en 0).
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    size:
+      name: size
+      in: query
+      required: false
+      description: Tamaño de página (máximo 100); fuera de rango responde 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    sort:
+      name: sort
+      in: query
+      required: false
+      description: Ordenamiento campo,asc o campo,desc. Solo se aceptan los campos indicados en cada operación; otro valor responde 400.
+      schema:
+        type: string
+        example: creadoEn,desc
+  headers:
+    IdempotencyKey:
+      description: Clave de idempotencia con la que se registró el pago (la enviada o la generada).
+      schema:
+        type: string
+        example: afed9d5e-3124-46b4-a0d1-2c95cf17198c
+    AlreadyProcessed:
+      description: Indica que la solicitud se había procesado previamente.
+      schema:
+        type: boolean
+        enum: [true]
+  responses:
+    BadRequest:
+      description: >-
+        Solicitud inválida: datos del cuerpo, identificador que no es UUID, paginación fuera de rango, sort no permitido o
+        ruta sin identificador; incluye el detalle por campo en errores cuando aplica
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            identificadorInvalido:
+              value:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/eventos/abc/balance
+                errores:
+                  - campo: eventoId
+                    mensaje: debe ser un identificador válido (UUID)
+            rutaInvalida:
+              value:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 400
+                error: Bad Request
+                message: 'La ruta no es válida: falta un identificador o contiene caracteres no permitidos.'
+                path: /api/v1/eventos//balance
+    SinCotizacion:
+      description: El evento no tiene cotización (o no existe)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:55Z'
+            status: 404
+            error: Not Found
+            message: No existe una cotización para el evento 11111111-1111-1111-1111-111111111111
+            path: /api/v1/eventos/11111111-1111-1111-1111-111111111111/balance
+    Unauthorized:
+      description: >-
+        Falta el token, venció o no es válido (firma, emisor o formato), o eventos-service no aceptó el token.
+        Cuerpo ErrorResponse (Fase 7).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            sinToken:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: 'Debes iniciar sesión para realizar esta operación. Envía el header Authorization: Bearer <token>.', path: /api/v1/finanzas/pagos}
+            tokenVencido:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: El token venció. Inicia sesión de nuevo., path: /api/v1/finanzas/pagos}
+            tokenInvalido:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: El token no es válido. Inicia sesión de nuevo., path: /api/v1/finanzas/pagos}
+    EventoNoEncontrado:
+      description: El evento no existe en eventos-service
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:55Z'
+            status: 404
+            error: Not Found
+            message: No existe un evento con id 11111111-1111-1111-1111-111111111111
+            path: /api/v1/finanzas/pagos
+    EventosNoDisponible:
+      description: eventos-service no responde
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:55Z'
+            status: 503
+            error: Service Unavailable
+            message: El servicio de eventos no está disponible en este momento. Intenta de nuevo más tarde.
+            path: /api/v1/cotizaciones
+    InternalServerError:
+      description: Error interno del servidor (mensaje neutro; el detalle queda solo en el log del servicio)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {timestamp: '2026-10-31T00:11:55Z', status: 500, error: Internal Server Error, message: Ocurrió un error interno. Intenta de nuevo más tarde., path: /api/v1/finanzas/pagos}
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Formato único de error en todos los microservicios. errores solo aparece cuando hay detalles por campo.
+      required: [timestamp, status, error, message, path]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-10-31T00:11:55Z'
+        status:
+          type: integer
+          example: 409
+        error:
+          type: string
+          description: Frase estándar del código HTTP.
+          example: Conflict
+        message:
+          type: string
+          description: Mensaje en español, entendible para la organizadora.
+          example: El monto 7000000 supera el saldo pendiente de 6270000.00 COP.
+        path:
+          type: string
+          example: /api/v1/finanzas/pagos
+        errores:
+          type: array
+          description: Detalle por campo (solo en errores de validación o de formato).
+          items:
+            $ref: '#/components/schemas/ErrorCampo'
+    ErrorCampo:
+      type: object
+      required: [campo, mensaje]
+      properties:
+        campo:
+          type: string
+          example: moneda
+        mensaje:
+          type: string
+          example: debe ser COP, la moneda de la cotización
+    PagoRequest:
+      type: object
+      required: [eventoId, clienteId, metodoPago, monto, moneda]
+      properties:
+        eventoId:
+          type: string
+          format: uuid
+          example: af79495b-9065-4b83-b08e-83ca7edabc5a
+        clienteId:
+          type: string
+          format: uuid
+          description: Debe ser el cliente del evento (si no, 400 en clienteId).
+          example: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+        metodoPago:
+          type: string
+          minLength: 1
+          example: TRANSFERENCIA
+        monto:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+          description: Mayor que 0 y no mayor que el saldo pendiente (si no, 409 — reto de la semana 8).
+          example: 1044000
+        moneda:
+          type: string
+          minLength: 1
+          description: Debe ser la moneda de la cotización (si no, 400 en moneda — reto de la semana 8).
+          example: COP
+        eventIdempotencia:
+          type: string
+          format: uuid
+          description: Clave de idempotencia (alternativa a la cabecera X-Idempotency-Key).
+          example: afed9d5e-3124-46b4-a0d1-2c95cf17198c
+    PagoResponse:
+      type: object
+      properties:
+        pagoId:
+          type: string
+          format: uuid
+          example: 438df9f8-1240-452d-bc4c-966003c8db15
+        estado:
+          type: string
+          example: PAGADO
+        eventIdempotencia:
+          type: string
+          nullable: true
+          description: Clave de idempotencia con la que se registró (nula en pagos anteriores a la Fase 4).
+          example: afed9d5e-3124-46b4-a0d1-2c95cf17198c
+        eventoId:
+          type: string
+          format: uuid
+        clienteId:
+          type: string
+          format: uuid
+        monto:
+          type: number
+        moneda:
+          type: string
+        metodoPago:
+          type: string
+        creadoEn:
+          type: string
+          format: date-time
+    PaginaPago:
+      allOf:
+        - $ref: '#/components/schemas/PaginaBase'
+        - type: object
+          properties:
+            contenido:
+              type: array
+              items:
+                $ref: '#/components/schemas/PagoResponse'
+    PaginaBase:
+      type: object
+      description: Página de resultados (formato propio de la API, igual en todos los listados).
+      required: [contenido, pagina, tamanoPagina, totalElementos, totalPaginas]
+      properties:
+        contenido:
+          type: array
+          items: {}
+        pagina:
+          type: integer
+          example: 0
+        tamanoPagina:
+          type: integer
+          example: 10
+        totalElementos:
+          type: integer
+          format: int64
+          example: 2
+        totalPaginas:
+          type: integer
+          example: 1
+    CotizacionRequest:
+      type: object
+      required: [eventoId]
+      properties:
+        eventoId:
+          type: string
+          format: uuid
+          example: 633930f6-534f-4687-96c7-e853be0c3389
+    CotizacionResponseDTO:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        eventoId:
+          type: string
+          format: uuid
+        invitados:
+          type: integer
+          description: Total de invitados (adultos + niños).
+          example: 105
+        zona:
+          type: string
+          enum: [NEIVA, RURAL]
+        valorBase:
+          type: number
+          description: Valor base del tipo de evento (incluye el cupo de invitados).
+          example: 8000000.00
+        recargoZona:
+          type: number
+          description: subtotal × recargo-rural en zona RURAL; 0 en NEIVA.
+          example: 0.00
+        total:
+          type: number
+          example: 8700000.00
+        montoReservaRequerido:
+          type: number
+          description: Depósito inicial requerido para confirmar el evento (finanzas.reserva.porcentaje × total de la cotización).
+          example: 2610000.00
+        moneda:
+          type: string
+          example: COP
+        creadoEn:
+          type: string
+          format: date-time
+        tipoEvento:
+          type: string
+          enum: [QUINCE_ANOS, BODA]
+          nullable: true
+          description: Los campos de desglose son nulos en cotizaciones anteriores a la Fase 4.
+        cantidadAdultos:
+          type: integer
+          nullable: true
+          example: 90
+        cantidadNinos:
+          type: integer
+          nullable: true
+          example: 15
+        adultosAdicionales:
+          type: integer
+          nullable: true
+          description: Adultos por encima del cupo incluido en el valor base.
+          example: 10
+        ninosAdicionales:
+          type: integer
+          nullable: true
+          example: 0
+        valorAdultosAdicionales:
+          type: number
+          nullable: true
+          example: 700000.00
+        valorNinosAdicionales:
+          type: number
+          nullable: true
+          example: 0.00
+        subtotal:
+          type: number
+          nullable: true
+          description: valorBase + valorAdultosAdicionales + valorNinosAdicionales.
+          example: 8700000.00
+    Balance:
+      type: object
+      properties:
+        eventoId:
+          type: string
+          format: uuid
+        valorBase:
+          type: number
+          description: Total de la cotización.
+        adicionales:
+          type: number
+        totalAbonado:
+          type: number
+        saldoPendiente:
+          type: number
+        total:
+          type: number
+        montoReservaRequerido:
+          type: number
+          description: Tomado de la cotización. eventos-service exige totalAbonado ≥ montoReservaRequerido para confirmar.
+        moneda:
+          type: string
+    AdicionalCatalogo:
+      type: object
+      properties:
+        codigo:
+          type: string
+          example: transporte-adicional
+        nombre:
+          type: string
+          example: Transporte adicional
+        costoUnitario:
+          type: number
+          example: 180000
+        moneda:
+          type: string
+          example: COP
+    AdicionalRequest:
+      type: object
+      required: [codigo, cantidad]
+      properties:
+        codigo:
+          type: string
+          minLength: 1
+          description: Código del catálogo (GET /servicios-adicionales).
+          example: transporte-adicional
+        cantidad:
+          type: integer
+          minimum: 1
+          example: 1
+    AdicionalEventoResponseDTO:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        eventoId:
+          type: string
+          format: uuid
+        codigo:
+          type: string
+          example: transporte-adicional
+        nombre:
+          type: string
+          example: Transporte adicional
+        cantidad:
+          type: integer
+          example: 1
+        valorUnitario:
+          type: number
+          example: 180000.00
+        subtotal:
+          type: number
+          example: 180000.00
+        creadoEn:
+          type: string
+          format: date-time

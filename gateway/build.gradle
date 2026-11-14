@@ -1,0 +1,41 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.4.5'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.maxieventos'
+version = '1.0.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+// Gateway GraphQL: solo delega en los servicios REST. Sin base de datos, Redis ni Kafka.
+// Fase 7: Spring Security (CORS, actuator) y jjwt (valida el JWT con el mismo patrón que los servicios).
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-graphql'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
+    // Escalares Date, DateTime y BigDecimal (versión de la misma línea que el graphql-java de Spring Boot 3.4.5)
+    implementation 'com.graphql-java:graphql-java-extended-scalars:22.0'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.graphql:spring-graphql-test'
+}
+
+tasks.named('test') { useJUnitPlatform() }
+
+// Solo se genera el jar ejecutable (bootJar); sin el plain jar el Dockerfile copia un único archivo
+jar {
+    enabled = false
+}

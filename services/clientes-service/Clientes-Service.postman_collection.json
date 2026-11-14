@@ -1,0 +1,116 @@
+{
+  "info": {
+    "name": "Clientes-Services 2.0",
+    "description": "Colección completa de pruebas con URLs directas y respuesta paginada para el microservicio de clientes.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. POST 201 Created - Crear cliente",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombreCompleto\": \"Maria Lopez\",\n  \"telefono\": \"3101234567\",\n  \"correo\": \"maria.lopez@gmail.com\",\n  \"direccion\": \"Calle 15 # 5-20, Neiva\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8082/api/v1/clientes",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8082",
+          "path": ["api", "v1", "clientes"]
+        }
+      }
+    },
+    {
+      "name": "2. POST 400 Bad Request - Correo invalido",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombreCompleto\": \"Juan Perez\",\n  \"telefono\": \"3009876543\",\n  \"correo\": \"juanSinArroba\",\n  \"direccion\": \"Carrera 7 # 10-25, Bogota\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8082/api/v1/clientes",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8082",
+          "path": ["api", "v1", "clientes"]
+        }
+      }
+    },
+    {
+      "name": "3. GET 200 OK - Paginacion y Filtro por Nombre",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8082/api/v1/clientes?nombre=Maria&page=0&size=10",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8082",
+          "path": ["api", "v1", "clientes"],
+          "query": [
+            { "key": "nombre", "value": "Maria" },
+            { "key": "page", "value": "0" },
+            { "key": "size", "value": "10" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "4. GET 404 Not Found - Cliente inexistente",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8082/api/v1/clientes/9999",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8082",
+          "path": ["api", "v1", "clientes", "9999"]
+        }
+      }
+    },
+    {
+      "name": "5. PUT 200 OK - Actualizar cliente",
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombreCompleto\": \"Maria Lopez Actualizada\",\n  \"telefono\": \"3109998877\",\n  \"correo\": \"maria.actualizada@gmail.com\",\n  \"direccion\": \"Avenida Pastrana # 10-20\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8082/api/v1/clientes/1",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8082",
+          "path": ["api", "v1", "clientes", "1"]
+        }
+      }
+    },
+    {
+      "name": "6. DELETE 204 No Content - Eliminar cliente",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8082/api/v1/clientes/1",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8082",
+          "path": ["api", "v1", "clientes", "1"]
+        }
+      }
+    }
+  ]
+}
