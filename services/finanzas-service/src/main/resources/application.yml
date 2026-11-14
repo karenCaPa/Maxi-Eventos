@@ -1,0 +1,105 @@
+server:
+  port: ${SERVER_PORT:8084}
+
+spring:
+  # Mensajes de validación siempre en español, sin depender de la cabecera Accept-Language
+  web:
+    locale: es
+    locale-resolver: fixed
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  application:
+    name: finanzas-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/maxi_eventos}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  sql:
+    init:
+      mode: always
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+logging:
+  # Fase 11C: código de referencia de la petición (X-Request-Id; "-" en los consumidores Kafka y tareas programadas)
+  pattern:
+    correlation: "[ref=%X{ref:--}] "
+  level:
+    org.springframework.kafka: INFO
+
+auth:
+  jwt:
+    secret: ${AUTH_JWT_SECRET}
+    # Emisor que debe traer el token (lo pone auth-service); no es un secreto
+    issuer: maxi-eventos-auth
+
+# Servicios que consulta finanzas-service (el JWT de la petición se reenvía)
+servicios:
+  eventos:
+    url: ${EVENTOS_SERVICE_URL:http://localhost:8081}
+  timeout:
+    conexion: 2s
+    lectura: 4s
+
+maxi-eventos:
+  kafka:
+    # Espera máxima de send() por los metadatos de Kafka (igual que eventos-service)
+    max-block-ms: 5000
+  # Outbox de los mensajes Kafka: reenvío periódico de lo que siga PENDIENTE (igual que eventos-service)
+  outbox:
+    intervalo-ms: 15000        # cada cuánto se revisan los pendientes
+    retraso-inicial-ms: 20000  # primera revisión tras el arranque
+    espera-minima: PT30S       # antigüedad mínima de una fila PENDIENTE para reenviarla (da tiempo al envío inmediato)
+    envio-atascado: PT2M       # una fila ENVIANDO sin confirmación tras este tiempo se vuelve a enviar
+    lote: 50
+
+finanzas:
+  moneda: ${FINANZAS_MONEDA:COP}
+  # Cotización: subtotal = valor base + adultos adicionales × valor adulto + niños adicionales × valor niño;
+  # en zona RURAL se suma recargo-rural × subtotal. Se valida al arrancar.
+  cotizacion:
+    # SEPARADO: cupos separados para adultos (adultos-incluidos) y niños (ninos-incluidos).
+    # UNICO: un solo cupo (invitados-incluidos) que cubre primero a los adultos y lo que sobre, a los niños.
+    # TODO valor real: confirmar con la organizadora si el cupo de invitados incluidos es único o separado.
+    modo-cupo: ${FINANZAS_MODO_CUPO:SEPARADO}
+    recargo-rural: ${FINANZAS_RECARGO_RURAL:0.10} # TODO valor real (0.10 = 10 % sobre el subtotal)
+    tarifas:
+      quince-anos:
+        valor-base: ${FINANZAS_QUINCE_VALOR_BASE:8000000} # TODO valor real
+        adultos-incluidos: ${FINANZAS_QUINCE_ADULTOS_INCLUIDOS:80} # TODO valor real
+        ninos-incluidos: ${FINANZAS_QUINCE_NINOS_INCLUIDOS:20} # TODO valor real
+        invitados-incluidos: ${FINANZAS_QUINCE_INVITADOS_INCLUIDOS:100} # TODO valor real (modo UNICO)
+        valor-adulto-adicional: ${FINANZAS_QUINCE_VALOR_ADULTO_ADICIONAL:70000} # TODO valor real
+        valor-nino-adicional: ${FINANZAS_QUINCE_VALOR_NINO_ADICIONAL:40000} # TODO valor real
+      boda:
+        valor-base: ${FINANZAS_BODA_VALOR_BASE:12000000} # TODO valor real
+        adultos-incluidos: ${FINANZAS_BODA_ADULTOS_INCLUIDOS:100} # TODO valor real
+        ninos-incluidos: ${FINANZAS_BODA_NINOS_INCLUIDOS:10} # TODO valor real
+        invitados-incluidos: ${FINANZAS_BODA_INVITADOS_INCLUIDOS:110} # TODO valor real (modo UNICO)
+        valor-adulto-adicional: ${FINANZAS_BODA_VALOR_ADULTO_ADICIONAL:90000} # TODO valor real
+        valor-nino-adicional: ${FINANZAS_BODA_VALOR_NINO_ADICIONAL:50000} # TODO valor real
+  reserva:
+    # Depósito inicial requerido para confirmar el evento, sobre el total de la cotización.
+    porcentaje: ${FINANZAS_RESERVA_PORCENTAJE:0.30} # TODO valor real
+  adicionales:
+    decoracion-premium: ${FINANZAS_ADICIONAL_DECORACION_PREMIUM:250000}
+    hora-extra: ${FINANZAS_ADICIONAL_HORA_EXTRA:120000}
+    transporte-adicional: ${FINANZAS_ADICIONAL_TRANSPORTE:180000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized

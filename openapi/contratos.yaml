@@ -1,0 +1,586 @@
+openapi: 3.0.3
+info:
+  title: Maxi Eventos - Contratos Service
+  description: >-
+    Contrato de cada evento, generado desde la plantilla con una foto de los datos (cliente, fecha, tipo, invitados, lugar
+    y valor total), descarga en PDF, firma (PENDIENTE → FIRMADO) y anexo con los servicios adicionales. Los datos se toman
+    por REST de eventos, clientes, lugares y finanzas reenviando el mismo token. Los adicionales del anexo llegan por Kafka
+    (servicios-adicionales.agregados), con idempotencia en contratos_eventos_procesados.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8085/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /contratos:
+    get:
+      operationId: listarContratos
+      summary: Listar contratos con paginación
+      description: 'Campos para sort: id, nombreEvento, estado, creadoEn (por defecto creadoEn,desc).'
+      parameters:
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+        - $ref: '#/components/parameters/sort'
+      responses:
+        '200':
+          description: Página de contratos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginaContrato'
+              example:
+                contenido:
+                  - id: f97377d7-d146-4912-a8cd-d3e387921905
+                    eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                    nombreEvento: Quince años de Lucía
+                    estado: FIRMADO
+                    creadoEn: '2026-10-30T23:59:38.578788Z'
+                    urlDocumento: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/contrato/pdf
+                    firmadoEn: '2026-10-30T23:59:38.704737Z'
+                    clienteNombre: Lucía Fernández Ospina
+                    fechaEvento: '2026-12-05'
+                    tipoEvento: QUINCE_ANOS
+                    cantidadAdultos: 90
+                    cantidadNinos: 15
+                    lugarNombre: Salón de Eventos Los Ocobos
+                    valorTotal: 8700000.00
+                    moneda: COP
+                pagina: 0
+                tamanoPagina: 10
+                totalElementos: 1
+                totalPaginas: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /contratos/{id}:
+    get:
+      operationId: obtenerContrato
+      summary: Obtener un contrato por UUID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: f97377d7-d146-4912-a8cd-d3e387921905
+      responses:
+        '200':
+          description: Contrato encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContratoResponseDTO'
+              examples:
+                firmado:
+                  $ref: '#/components/examples/ContratoFirmado'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No existe un contrato con ese id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 404
+                error: Not Found
+                message: No existe un contrato con id 11111111-1111-1111-1111-111111111111
+                path: /api/v1/contratos/11111111-1111-1111-1111-111111111111
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /eventos/{eventoId}/contrato:
+    get:
+      operationId: obtenerContratoDeEvento
+      summary: Obtener el contrato de un evento
+      description: Lo consulta eventos-service antes de confirmar un evento, para validar que el contrato esté FIRMADO.
+      parameters:
+        - $ref: '#/components/parameters/eventoId'
+      responses:
+        '200':
+          description: Contrato del evento
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContratoResponseDTO'
+              examples:
+                firmado:
+                  $ref: '#/components/examples/ContratoFirmado'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      operationId: crearContrato
+      summary: Generar o recuperar el contrato del evento
+      description: |
+        No necesita cuerpo (si se envía, se ignora). Con el mismo token, consulta los datos del evento a eventos-service,
+        el cliente a clientes-service, el lugar a lugares-service (si el evento tiene lugar) y el valor total de la
+        cotización a finanzas-service, y los guarda en el contrato (foto de los datos al crearse: el documento no cambia
+        aunque cambien los datos de origen). El contrato nace PENDIENTE.
+        Si el evento ya tiene contrato se devuelve el existente (200) sin consultar a otros servicios.
+      parameters:
+        - $ref: '#/components/parameters/eventoId'
+      responses:
+        '201':
+          description: Contrato creado en estado PENDIENTE
+          headers:
+            Location:
+              description: URL del contrato creado (/api/v1/contratos/{id}).
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContratoResponseDTO'
+              example:
+                id: f97377d7-d146-4912-a8cd-d3e387921905
+                eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+                nombreEvento: Quince años de Lucía
+                estado: PENDIENTE
+                creadoEn: '2026-10-30T23:59:38.578788Z'
+                urlDocumento: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/contrato/pdf
+                firmadoEn: null
+                clienteNombre: Lucía Fernández Ospina
+                fechaEvento: '2026-12-05'
+                tipoEvento: QUINCE_ANOS
+                cantidadAdultos: 90
+                cantidadNinos: 15
+                lugarNombre: Salón de Eventos Los Ocobos
+                valorTotal: 8700000.00
+                moneda: COP
+        '200':
+          description: El evento ya tenía contrato; se devuelve el existente sin modificarlo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContratoResponseDTO'
+              examples:
+                yaExistia:
+                  $ref: '#/components/examples/ContratoFirmado'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: El evento no existe en eventos-service
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 404
+                error: Not Found
+                message: No existe un evento con id 11111111-1111-1111-1111-111111111111
+                path: /api/v1/eventos/11111111-1111-1111-1111-111111111111/contrato
+        '409':
+          description: El evento está CANCELADO, no tiene cotización, o su cliente o lugar ya no existen
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                sinCotizacion:
+                  value:
+                    timestamp: '2026-10-31T00:11:55Z'
+                    status: 409
+                    error: Conflict
+                    message: El evento no tiene cotización. Genera la cotización antes de crear el contrato.
+                    path: /api/v1/eventos/633930f6-534f-4687-96c7-e853be0c3389/contrato
+                eventoCancelado:
+                  value:
+                    timestamp: '2026-10-31T00:11:55Z'
+                    status: 409
+                    error: Conflict
+                    message: El evento está CANCELADO; no se puede crear su contrato.
+                    path: /api/v1/eventos/406ea893-c467-4561-a03f-ebec8d569cce/contrato
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /eventos/{eventoId}/contrato/pdf:
+    get:
+      operationId: obtenerContratoPdf
+      summary: Descargar el contrato en PDF
+      description: >-
+        Generado desde la plantilla con la foto de los datos: cliente (nombre, teléfono, correo), evento, tipo, fecha,
+        invitados (adultos y niños), lugar (o "Por definir") y valor total con formato es-CO (8.700.000,00 COP). Los
+        contratos anteriores a la Fase 4 muestran "No registrado" en los datos que no tienen.
+      parameters:
+        - $ref: '#/components/parameters/eventoId'
+      responses:
+        '200':
+          description: Archivo PDF del contrato (Content-Disposition con el nombre contrato-<eventoId>.pdf)
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /eventos/{eventoId}/contrato/marcar-firmado:
+    patch:
+      operationId: marcarContratoFirmado
+      summary: Marcar el contrato como firmado
+      description: PENDIENTE → FIRMADO (guarda firmadoEn). Firmar un contrato ya FIRMADO responde 409.
+      parameters:
+        - $ref: '#/components/parameters/eventoId'
+      responses:
+        '200':
+          description: Contrato actualizado a FIRMADO
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContratoResponseDTO'
+              examples:
+                firmado:
+                  $ref: '#/components/examples/ContratoFirmado'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: El contrato ya está FIRMADO
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 409
+                error: Conflict
+                message: El contrato del evento af79495b-9065-4b83-b08e-83ca7edabc5a ya está FIRMADO.
+                path: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/contrato/marcar-firmado
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /eventos/{eventoId}/adicionales/anexo-pdf:
+    get:
+      operationId: obtenerAnexoPdf
+      summary: Descargar el anexo de servicios adicionales en PDF
+      description: >-
+        Se genera al pedirlo con los adicionales registrados en contratos-service (tabla contrato_adicionales), que llegan
+        por Kafka en SERVICIO_ADICIONAL_AGREGADO (nombre, cantidad, valor unitario y subtotal de cada uno, total de
+        adicionales y valor total con adicionales). No consulta a finanzas-service, así que funciona aunque esté caído. Un
+        adicional agregado antes de crear el contrato aparece igualmente. Entre agregar un adicional y verlo en el anexo
+        puede pasar un momento (procesamiento asíncrono). No modifica el contrato original.
+      parameters:
+        - $ref: '#/components/parameters/eventoId'
+      responses:
+        '200':
+          description: Archivo PDF del anexo (Content-Disposition con el nombre anexo-<eventoId>.pdf)
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: El evento no tiene servicios adicionales
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 409
+                error: Conflict
+                message: El evento no tiene servicios adicionales; no hay anexo que generar.
+                path: /api/v1/eventos/633930f6-534f-4687-96c7-e853be0c3389/adicionales/anexo-pdf
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  examples:
+    ContratoFirmado:
+      summary: Contrato firmado del evento Quince años de Lucía
+      value:
+        id: f97377d7-d146-4912-a8cd-d3e387921905
+        eventoId: af79495b-9065-4b83-b08e-83ca7edabc5a
+        nombreEvento: Quince años de Lucía
+        estado: FIRMADO
+        creadoEn: '2026-10-30T23:59:38.578788Z'
+        urlDocumento: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/contrato/pdf
+        firmadoEn: '2026-10-30T23:59:38.704737Z'
+        clienteNombre: Lucía Fernández Ospina
+        fechaEvento: '2026-12-05'
+        tipoEvento: QUINCE_ANOS
+        cantidadAdultos: 90
+        cantidadNinos: 15
+        lugarNombre: Salón de Eventos Los Ocobos
+        valorTotal: 8700000.00
+        moneda: COP
+  parameters:
+    page:
+      name: page
+      in: query
+      required: false
+      description: Número de página (empieza en 0).
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    size:
+      name: size
+      in: query
+      required: false
+      description: Tamaño de página (máximo 100); fuera de rango responde 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    sort:
+      name: sort
+      in: query
+      required: false
+      description: Ordenamiento campo,asc o campo,desc. Solo se aceptan los campos indicados en cada operación; otro valor responde 400.
+      schema:
+        type: string
+        example: creadoEn,desc
+    eventoId:
+      name: eventoId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+        example: af79495b-9065-4b83-b08e-83ca7edabc5a
+  responses:
+    Unauthorized:
+      description: >-
+        Falta el token, venció o no es válido (firma, emisor o formato), o un servicio consultado no aceptó el token.
+        Cuerpo ErrorResponse (Fase 7).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            sinToken:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: 'Debes iniciar sesión para realizar esta operación. Envía el header Authorization: Bearer <token>.', path: /api/v1/contratos}
+            tokenVencido:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: El token venció. Inicia sesión de nuevo., path: /api/v1/contratos}
+            tokenInvalido:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: El token no es válido. Inicia sesión de nuevo., path: /api/v1/contratos}
+    ServiceUnavailable:
+      description: Un servicio del que se toman los datos (eventos, clientes, lugares o finanzas) no responde
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:55Z'
+            status: 503
+            error: Service Unavailable
+            message: El servicio de finanzas no está disponible en este momento. Intenta de nuevo más tarde.
+            path: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/contrato
+    BadRequest:
+      description: >-
+        Solicitud inválida: identificador que no es UUID, paginación fuera de rango, sort no permitido o ruta sin
+        identificador (por ejemplo /eventos//contrato)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            identificadorInvalido:
+              value:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/eventos/abc/contrato
+                errores:
+                  - campo: eventoId
+                    mensaje: debe ser un identificador válido (UUID)
+            rutaInvalida:
+              value:
+                timestamp: '2026-10-31T00:11:55Z'
+                status: 400
+                error: Bad Request
+                message: 'La ruta no es válida: falta un identificador o contiene caracteres no permitidos.'
+                path: /api/v1/eventos//contrato
+    NotFound:
+      description: El evento no tiene contrato
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:55Z'
+            status: 404
+            error: Not Found
+            message: No existe un contrato para el evento 633930f6-534f-4687-96c7-e853be0c3389
+            path: /api/v1/eventos/633930f6-534f-4687-96c7-e853be0c3389/contrato
+    InternalServerError:
+      description: Error interno del servidor (mensaje neutro; el detalle queda solo en el log del servicio)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {timestamp: '2026-10-31T00:11:55Z', status: 500, error: Internal Server Error, message: Ocurrió un error interno. Intenta de nuevo más tarde., path: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/contrato/pdf}
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Formato único de error en todos los microservicios. errores solo aparece cuando hay detalles por campo.
+      required: [timestamp, status, error, message, path]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-10-31T00:11:55Z'
+        status:
+          type: integer
+          example: 409
+        error:
+          type: string
+          description: Frase estándar del código HTTP.
+          example: Conflict
+        message:
+          type: string
+          description: Mensaje en español, entendible para la organizadora.
+          example: El contrato del evento af79495b-9065-4b83-b08e-83ca7edabc5a ya está FIRMADO.
+        path:
+          type: string
+          example: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/contrato/marcar-firmado
+        errores:
+          type: array
+          description: Detalle por campo (solo en errores de validación o de formato).
+          items:
+            $ref: '#/components/schemas/ErrorCampo'
+    ErrorCampo:
+      type: object
+      required: [campo, mensaje]
+      properties:
+        campo:
+          type: string
+          example: eventoId
+        mensaje:
+          type: string
+          example: debe ser un identificador válido (UUID)
+    ContratoResponseDTO:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: f97377d7-d146-4912-a8cd-d3e387921905
+        eventoId:
+          type: string
+          format: uuid
+          example: af79495b-9065-4b83-b08e-83ca7edabc5a
+        nombreEvento:
+          type: string
+          example: Quince años de Lucía
+        estado:
+          type: string
+          enum: [PENDIENTE, FIRMADO]
+          description: Nace PENDIENTE; pasa a FIRMADO una sola vez.
+        creadoEn:
+          type: string
+          format: date-time
+        urlDocumento:
+          type: string
+          example: /api/v1/eventos/af79495b-9065-4b83-b08e-83ca7edabc5a/contrato/pdf
+        firmadoEn:
+          type: string
+          format: date-time
+          nullable: true
+        clienteNombre:
+          type: string
+          nullable: true
+          description: Los datos de la foto son nulos en contratos anteriores a la Fase 4.
+          example: Lucía Fernández Ospina
+        fechaEvento:
+          type: string
+          format: date
+          nullable: true
+          example: '2026-12-05'
+        tipoEvento:
+          type: string
+          enum: [QUINCE_ANOS, BODA]
+          nullable: true
+        cantidadAdultos:
+          type: integer
+          nullable: true
+          example: 90
+        cantidadNinos:
+          type: integer
+          nullable: true
+          example: 15
+        lugarNombre:
+          type: string
+          nullable: true
+          description: Nulo si el evento no tenía lugar al crear el contrato.
+          example: Salón de Eventos Los Ocobos
+        valorTotal:
+          type: number
+          nullable: true
+          description: Total de la cotización al crear el contrato (sin servicios adicionales; esos van en el anexo).
+          example: 8700000.00
+        moneda:
+          type: string
+          nullable: true
+          example: COP
+    PaginaContrato:
+      allOf:
+        - $ref: '#/components/schemas/PaginaBase'
+        - type: object
+          properties:
+            contenido:
+              type: array
+              items:
+                $ref: '#/components/schemas/ContratoResponseDTO'
+    PaginaBase:
+      type: object
+      description: Página de resultados (formato propio de la API, igual en todos los listados).
+      required: [contenido, pagina, tamanoPagina, totalElementos, totalPaginas]
+      properties:
+        contenido:
+          type: array
+          items: {}
+        pagina:
+          type: integer
+          description: Número de la página devuelta (empieza en 0).
+          example: 0
+        tamanoPagina:
+          type: integer
+          description: Tamaño de página solicitado.
+          example: 10
+        totalElementos:
+          type: integer
+          format: int64
+          description: Total de elementos que cumplen el filtro.
+          example: 1
+        totalPaginas:
+          type: integer
+          description: Total de páginas.
+          example: 1

@@ -1,0 +1,15 @@
+# Normalización de fin de línea
+* text=auto
+
+# Scripts que se ejecutan en Linux / contenedores: siempre LF
+gradlew text eol=lf
+*.sh    text eol=lf
+
+# Scripts de Windows: siempre CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Binarios
+*.jar binary
+*.pdf binary
+*.png binary

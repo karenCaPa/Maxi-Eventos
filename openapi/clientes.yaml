@@ -1,0 +1,440 @@
+openapi: 3.0.3
+info:
+  title: Maxi Eventos - Clientes Service
+  description: >-
+    Clientes de la organizadora (quien contrata la fiesta de 15 años o la boda). eventos-service valida aquí que el
+    cliente exista al crear un evento, y contratos-service toma su nombre para el contrato. La consulta por id se cachea
+    en Redis (clientes, 10 min); si Redis no responde, se consulta la base de datos.
+  version: 1.1.0
+servers:
+  - url: http://localhost:8082/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /clientes:
+    get:
+      operationId: listarClientes
+      summary: Listar clientes con paginación y filtro opcional por nombre
+      description: 'Campos para sort: id, nombreCompleto, telefono, correo, direccion. Sin sort, sin orden fijo. El listado no se cachea.'
+      parameters:
+        - name: nombre
+          in: query
+          required: false
+          description: Parte del nombre completo, sin distinguir mayúsculas.
+          schema:
+            type: string
+            example: María
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+        - $ref: '#/components/parameters/sort'
+      responses:
+        '200':
+          description: Página de clientes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginaCliente'
+              example:
+                contenido:
+                  - id: f6bbb8d3-fabb-42e9-a6c2-87caecb9cac5
+                    nombreCompleto: María José Cañón Díaz
+                    telefono: '3209876543'
+                    correo: mariajose.canon@ejemplo.com
+                    direccion: Vereda El Caguán, Neiva
+                pagina: 0
+                tamanoPagina: 10
+                totalElementos: 1
+                totalPaginas: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      operationId: crearCliente
+      summary: Crear un cliente
+      description: El correo y el teléfono no se pueden repetir (409).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClienteRequest'
+            example:
+              nombreCompleto: Lucía Fernández Ospina
+              telefono: '3101234567'
+              correo: lucia.fernandez@ejemplo.com
+              direccion: 'Calle 8 # 5-32, Neiva'
+      responses:
+        '201':
+          description: Cliente creado
+          headers:
+            Location:
+              description: URL del cliente creado (/api/v1/clientes/{id}).
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClienteResponse'
+              example:
+                id: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                nombreCompleto: Lucía Fernández Ospina
+                telefono: '3101234567'
+                correo: lucia.fernandez@ejemplo.com
+                direccion: 'Calle 8 # 5-32, Neiva'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /clientes/{id}:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    get:
+      operationId: obtenerCliente
+      summary: Obtener un cliente por UUID
+      description: Respuesta cacheada en Redis (clientes, 10 min); se reemplaza al actualizar y se borra al eliminar.
+      responses:
+        '200':
+          description: Cliente encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClienteResponse'
+              example:
+                id: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                nombreCompleto: Lucía Fernández Ospina
+                telefono: '3101234567'
+                correo: lucia.fernandez@ejemplo.com
+                direccion: 'Calle 8 # 5-32, Neiva'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      operationId: actualizarCliente
+      summary: Actualizar un cliente
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClienteRequest'
+            example:
+              nombreCompleto: Lucía Fernández Ospina
+              telefono: '3101234567'
+              correo: lucia.fernandez@ejemplo.com
+              direccion: 'Carrera 5 # 10-20, Neiva'
+      responses:
+        '200':
+          description: Cliente actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClienteResponse'
+              example:
+                id: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+                nombreCompleto: Lucía Fernández Ospina
+                telefono: '3101234567'
+                correo: lucia.fernandez@ejemplo.com
+                direccion: 'Carrera 5 # 10-20, Neiva'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      operationId: eliminarCliente
+      summary: Eliminar un cliente
+      responses:
+        '204':
+          description: Cliente eliminado (sin cuerpo)
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Forbidden:
+      description: >-
+        Fase 11D: el token es válido pero su rol no permite la operación. Borrar un cliente es solo del ADMINISTRADOR; el
+        ASISTENTE (y un token sin claim rol) recibe 403. Crear, editar y consultar clientes lo pueden hacer los dos roles.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-11-04T21:00:00Z'
+            status: 403
+            error: Forbidden
+            message: No tienes permiso para realizar esta operación.
+            path: /api/v1/clientes/e146c96a-919d-4e82-b1c9-ebda1bca8b92
+    BadRequest:
+      description: >-
+        Solicitud inválida: datos del cuerpo, id que no es UUID, paginación fuera de rango o ruta sin identificador;
+        incluye el detalle por campo en errores cuando aplica
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            datosInvalidos:
+              value:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/clientes
+                errores:
+                  - campo: correo
+                    mensaje: debe ser una dirección de correo electrónico con formato correcto
+                  - campo: telefono
+                    mensaje: el tamaño debe estar entre 7 y 16
+                  - campo: telefono
+                    mensaje: debe tener entre 7 y 15 dígitos y solo puede empezar con +
+                  - campo: nombreCompleto
+                    mensaje: el tamaño debe estar entre 3 y 100
+            identificadorInvalido:
+              value:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 400
+                error: Bad Request
+                message: Los datos enviados no son válidos. Revisa los campos indicados.
+                path: /api/v1/clientes/abc
+                errores:
+                  - campo: id
+                    mensaje: debe ser un identificador válido (UUID)
+    Unauthorized:
+      description: Falta el token, venció o no es válido (firma, emisor o formato). Cuerpo ErrorResponse (Fase 7).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            sinToken:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: 'Debes iniciar sesión para realizar esta operación. Envía el header Authorization: Bearer <token>.', path: /api/v1/clientes}
+            tokenVencido:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: El token venció. Inicia sesión de nuevo., path: /api/v1/clientes}
+            tokenInvalido:
+              value: {timestamp: '2026-10-31T00:11:53Z', status: 401, error: Unauthorized, message: El token no es válido. Inicia sesión de nuevo., path: /api/v1/clientes}
+    NotFound:
+      description: No existe un cliente con ese id
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-31T00:11:54Z'
+            status: 404
+            error: Not Found
+            message: No existe un cliente con id 11111111-1111-1111-1111-111111111111
+            path: /api/v1/clientes/11111111-1111-1111-1111-111111111111
+    Conflict:
+      description: Ya hay otro cliente con ese correo o ese teléfono
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            correoRepetido:
+              value:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 409
+                error: Conflict
+                message: El correo lucia.fernandez@ejemplo.com ya se encuentra registrado
+                path: /api/v1/clientes
+            telefonoRepetido:
+              value:
+                timestamp: '2026-10-31T00:11:54Z'
+                status: 409
+                error: Conflict
+                message: El teléfono 3101234567 ya se encuentra registrado
+                path: /api/v1/clientes
+    InternalServerError:
+      description: Error interno del servidor (mensaje neutro; el detalle queda solo en el log del servicio)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {timestamp: '2026-10-31T00:11:54Z', status: 500, error: Internal Server Error, message: Ocurrió un error interno. Intenta de nuevo más tarde., path: /api/v1/clientes}
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+        example: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+    page:
+      name: page
+      in: query
+      required: false
+      description: Número de página (empieza en 0).
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    size:
+      name: size
+      in: query
+      required: false
+      description: Tamaño de página (máximo 100); fuera de rango responde 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    sort:
+      name: sort
+      in: query
+      required: false
+      description: Ordenamiento campo,asc o campo,desc. Solo se aceptan los campos indicados en cada operación; otro valor responde 400.
+      schema:
+        type: string
+        example: nombreCompleto,asc
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Formato único de error en todos los microservicios. errores solo aparece cuando hay detalles por campo.
+      required: [timestamp, status, error, message, path]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-10-31T00:11:54Z'
+        status:
+          type: integer
+          example: 400
+        error:
+          type: string
+          description: Frase estándar del código HTTP.
+          example: Bad Request
+        message:
+          type: string
+          description: Mensaje en español, entendible para la organizadora.
+          example: Los datos enviados no son válidos. Revisa los campos indicados.
+        path:
+          type: string
+          example: /api/v1/clientes
+        errores:
+          type: array
+          description: Detalle por campo (solo en errores de validación o de formato).
+          items:
+            $ref: '#/components/schemas/ErrorCampo'
+    ErrorCampo:
+      type: object
+      required: [campo, mensaje]
+      properties:
+        campo:
+          type: string
+          example: correo
+        mensaje:
+          type: string
+          example: debe ser una dirección de correo electrónico con formato correcto
+    ClienteRequest:
+      type: object
+      required: [nombreCompleto, telefono, correo]
+      properties:
+        nombreCompleto:
+          type: string
+          minLength: 3
+          maxLength: 100
+          example: Lucía Fernández Ospina
+        telefono:
+          type: string
+          minLength: 7
+          maxLength: 16
+          pattern: '^\+?[0-9]{7,15}$'
+          example: '3101234567'
+        correo:
+          type: string
+          format: email
+          maxLength: 150
+          example: lucia.fernandez@ejemplo.com
+        direccion:
+          type: string
+          maxLength: 250
+          example: 'Calle 8 # 5-32, Neiva'
+    ClienteResponse:
+      type: object
+      required: [id, nombreCompleto, telefono, correo]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: e146c96a-919d-4e82-b1c9-ebda1bca8b92
+        nombreCompleto:
+          type: string
+          example: Lucía Fernández Ospina
+        telefono:
+          type: string
+          example: '3101234567'
+        correo:
+          type: string
+          format: email
+          example: lucia.fernandez@ejemplo.com
+        direccion:
+          type: string
+          example: 'Calle 8 # 5-32, Neiva'
+    PaginaCliente:
+      allOf:
+        - $ref: '#/components/schemas/PaginaBase'
+        - type: object
+          required: [contenido]
+          properties:
+            contenido:
+              type: array
+              items:
+                $ref: '#/components/schemas/ClienteResponse'
+    PaginaBase:
+      type: object
+      description: Página de resultados (formato propio de la API, igual en todos los listados).
+      required: [contenido, pagina, tamanoPagina, totalElementos, totalPaginas]
+      properties:
+        contenido:
+          type: array
+          items: {}
+        pagina:
+          type: integer
+          description: Número de la página devuelta (empieza en 0).
+          example: 0
+        tamanoPagina:
+          type: integer
+          description: Tamaño de página solicitado.
+          example: 10
+        totalElementos:
+          type: integer
+          format: int64
+          description: Total de elementos que cumplen el filtro.
+          example: 1
+        totalPaginas:
+          type: integer
+          description: Total de páginas.
+          example: 1

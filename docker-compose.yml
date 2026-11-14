@@ -1,0 +1,460 @@
+# Maxi Eventos — entorno local completo.
+# Uso:  Copy-Item .env.example .env   (y cambiar los valores)
+#       docker compose up --build
+# Todos los secretos se leen de .env; aquí no hay ningún valor sensible.
+
+# Presupuesto de memoria: el entorno completo (11 servicios Java + infraestructura) debe caber en 8 GB de WSL.
+# 11 x 512m + kafka 768m + postgres 384m + redis 128m + kafdrop 320m + frontend (nginx) 64m ≈ 7,2 GB (topes, no reservas).
+# Consumo real medido en la Fase 1 con 8 servicios: ≈ 3,7 GB (cada servicio Java ≈ 330-380 MiB).
+x-servicio-base: &servicio-base
+  restart: unless-stopped
+  mem_limit: 512m
+  networks:
+    - maxi-eventos-net
+
+x-healthcheck-base: &healthcheck-base
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 60s
+
+# Variables comunes a todos los microservicios
+x-env-base: &env-base
+  # Heap 256 MB + metaspace 128 MB + code cache 48 MB + hilos ≈ 500 MB en el peor caso (límite 512m).
+  JAVA_TOOL_OPTIONS: "-Xmx256m -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=48m -Xss512k -XX:+UseSerialGC"
+  SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-db:5432/${POSTGRES_DB:-maxi_eventos}
+  SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:?Definir POSTGRES_USER en .env}
+  SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Definir POSTGRES_PASSWORD en .env}
+  SPRING_DATA_REDIS_HOST: redis
+  SPRING_DATA_REDIS_PORT: 6379
+  SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?Definir REDIS_PASSWORD en .env}
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?Definir AUTH_JWT_SECRET en .env}
+
+services:
+  # ------------------------------------------------------------------ infraestructura
+  postgres-db:
+    image: postgres:15-alpine
+    container_name: postgres_db
+    restart: always
+    mem_limit: 384m
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-maxi_eventos}
+      POSTGRES_USER: ${POSTGRES_USER:?Definir POSTGRES_USER en .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Definir POSTGRES_PASSWORD en .env}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - maxi-eventos-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis_cache
+    restart: always
+    mem_limit: 128m
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Definir REDIS_PASSWORD en .env}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Definir REDIS_PASSWORD en .env}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - maxi-eventos-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka_broker
+    mem_limit: 768m
+    ports:
+      - "9092:9092"
+    environment:
+      # La imagen usa -Xmx1G por defecto; un broker de un nodo con pocos tópicos funciona con 384 MB
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx384m"
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:29093'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      # Datos en el volumen kafka_data: tópicos, mensajes y offsets sobreviven a docker compose down / up.
+      KAFKA_LOG_DIRS: '/var/lib/kafka/data'
+      # Fase 11E: los tópicos los crea cada servicio con NewTopic (3 particiones), productores Y consumidores. Sin esto,
+      # el primer consumidor que se suscribía a un tópico que aún no existía lo creaba con 1 partición y las otras dos
+      # llegaban unos 5 minutos después (refresco de metadatos): la demora de un Kafka vacío (docs/kafka.md).
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      # KRaft: el ID del clúster debe ser SIEMPRE el mismo para que el broker arranque con el volumen existente
+      # (el almacenamiento queda formateado con este ID). No es un secreto; si se cambia, hay que borrar kafka_data.
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-MkU3OEVBNTcwNTJENDM2Qk}
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - maxi-eventos-net
+
+  kafdrop:
+    image: obsidiandynamics/kafdrop:4.0.1
+    container_name: kafdrop
+    # 256m se quedaba al 94 %: la JVM usa -Xmx128M pero la memoria nativa ocupa el resto
+    mem_limit: 320m
+    ports:
+      - "9000:9000"
+    environment:
+      KAFKA_BROKERCONNECT: kafka:29092
+      JVM_OPTS: "-Xms32M -Xmx128M"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - maxi-eventos-net
+
+  # ------------------------------------------------------------------ microservicios
+  # depends_on solo hacia la infraestructura que cada servicio usa; no hay
+  # dependencias de arranque entre microservicios.
+  # Fase 9A: Redis solo lo usan como caché clientes, lugares, proveedores y logística; auth, eventos,
+  # finanzas y contratos ya no dependen de él (sin starter; su health no incluye Redis).
+
+  auth-service:
+    <<: *servicio-base
+    build:
+      context: ./services/auth-service
+    container_name: auth_service
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *env-base
+      SERVER_PORT: 8080
+      AUTH_ORGANIZER_EMAIL: ${AUTH_ORGANIZER_EMAIL:?Definir AUTH_ORGANIZER_EMAIL en .env}
+      AUTH_ORGANIZER_PASSWORD_HASH: ${AUTH_ORGANIZER_PASSWORD_HASH:?Definir AUTH_ORGANIZER_PASSWORD_HASH en .env}
+      # Id opaco de la organizadora (sub del JWT). No es un secreto: tiene valor por defecto.
+      AUTH_ORGANIZER_ID: ${AUTH_ORGANIZER_ID:-3f6c1b9e-2d4a-4e8f-b7a5-9c0d1e2f3a4b}
+      AUTH_ORGANIZER_NOMBRE: ${AUTH_ORGANIZER_NOMBRE:-Organizadora}
+      # Fase 11D: el usuario ASISTENTE (rol con menos permisos; matriz en docs/seguridad.md). Lo genera
+      # scripts/verificacion/rotar-password.ps1 -Usuario asistente.
+      AUTH_ASISTENTE_EMAIL: ${AUTH_ASISTENTE_EMAIL:?Definir AUTH_ASISTENTE_EMAIL en .env}
+      AUTH_ASISTENTE_PASSWORD_HASH: ${AUTH_ASISTENTE_PASSWORD_HASH:?Definir AUTH_ASISTENTE_PASSWORD_HASH en .env}
+      AUTH_ASISTENTE_ID: ${AUTH_ASISTENTE_ID:-9b1e7c4a-2f3d-4a5b-8c6d-7e8f9a0b1c2d}
+      AUTH_ASISTENTE_NOMBRE: ${AUTH_ASISTENTE_NOMBRE:-Asistente}
+      AUTH_TOKEN_TTL: ${AUTH_TOKEN_TTL:-PT8H}
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health || exit 1"]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+
+  eventos-service:
+    <<: *servicio-base
+    build:
+      context: ./services/eventos-service
+    container_name: eventos_service
+    ports:
+      - "8081:8081"
+    environment:
+      <<: *env-base
+      SERVER_PORT: 8081
+      # Servicios que valida eventos-service por REST (no son dependencias de arranque)
+      CLIENTES_SERVICE_URL: http://clientes-service:8082
+      LUGARES_SERVICE_URL: http://lugares-service:8083
+      CONTRATOS_SERVICE_URL: http://contratos-service:8085
+      FINANZAS_SERVICE_URL: http://finanzas-service:8084
+      # Días en que se registran eventos (regla de negocio; no es un secreto)
+      DIAS_PERMITIDOS: ${DIAS_PERMITIDOS:-FRIDAY,SATURDAY,SUNDAY}
+      # Fase 11H: la misma zona horaria en Eventos (recordatorios), Notificaciones (textos) y la interfaz
+      ZONA_HORARIA: ${ZONA_HORARIA:-America/Bogota}
+      # Fase 11E: recordatorios EVENTO_PROXIMO. Días antes del evento (el umbral más pequeño que aplique) y horario de la
+      # revisión (cron de Spring en la zona ZONA_HORARIA; "-" la desactiva y solo queda la ejecución manual).
+      RECORDATORIOS_DIAS: ${RECORDATORIOS_DIAS:-7,1}
+      RECORDATORIOS_CRON: ${RECORDATORIOS_CRON:-0 0 7 * * *}
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/actuator/health || exit 1"]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  clientes-service:
+    <<: *servicio-base
+    build:
+      context: ./services/clientes-service
+    container_name: clientes_service
+    ports:
+      - "8082:8082"
+    environment:
+      <<: *env-base
+      SERVER_PORT: 8082
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8082/actuator/health || exit 1"]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  lugares-service:
+    <<: *servicio-base
+    build:
+      context: ./services/lugares-service
+    container_name: lugares_service
+    ports:
+      - "8083:8083"
+    environment:
+      <<: *env-base
+      SERVER_PORT: 8083
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8083/actuator/health || exit 1"]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  finanzas-service:
+    <<: *servicio-base
+    build:
+      context: ./services/finanzas-service
+    container_name: finanzas_service
+    ports:
+      - "8084:8084"
+    environment:
+      <<: *env-base
+      SERVER_PORT: 8084
+      EVENTOS_SERVICE_URL: http://eventos-service:8081
+      # Tarifas de la cotización (valores de ejemplo, TODO valor real; ver finanzas application.yml)
+      FINANZAS_MODO_CUPO: ${FINANZAS_MODO_CUPO:-SEPARADO}
+      FINANZAS_RECARGO_RURAL: ${FINANZAS_RECARGO_RURAL:-0.10}
+      FINANZAS_QUINCE_VALOR_BASE: ${FINANZAS_QUINCE_VALOR_BASE:-8000000}
+      FINANZAS_QUINCE_ADULTOS_INCLUIDOS: ${FINANZAS_QUINCE_ADULTOS_INCLUIDOS:-80}
+      FINANZAS_QUINCE_NINOS_INCLUIDOS: ${FINANZAS_QUINCE_NINOS_INCLUIDOS:-20}
+      FINANZAS_QUINCE_INVITADOS_INCLUIDOS: ${FINANZAS_QUINCE_INVITADOS_INCLUIDOS:-100}
+      FINANZAS_QUINCE_VALOR_ADULTO_ADICIONAL: ${FINANZAS_QUINCE_VALOR_ADULTO_ADICIONAL:-70000}
+      FINANZAS_QUINCE_VALOR_NINO_ADICIONAL: ${FINANZAS_QUINCE_VALOR_NINO_ADICIONAL:-40000}
+      FINANZAS_BODA_VALOR_BASE: ${FINANZAS_BODA_VALOR_BASE:-12000000}
+      FINANZAS_BODA_ADULTOS_INCLUIDOS: ${FINANZAS_BODA_ADULTOS_INCLUIDOS:-100}
+      FINANZAS_BODA_NINOS_INCLUIDOS: ${FINANZAS_BODA_NINOS_INCLUIDOS:-10}
+      FINANZAS_BODA_INVITADOS_INCLUIDOS: ${FINANZAS_BODA_INVITADOS_INCLUIDOS:-110}
+      FINANZAS_BODA_VALOR_ADULTO_ADICIONAL: ${FINANZAS_BODA_VALOR_ADULTO_ADICIONAL:-90000}
+      FINANZAS_BODA_VALOR_NINO_ADICIONAL: ${FINANZAS_BODA_VALOR_NINO_ADICIONAL:-50000}
+      FINANZAS_RESERVA_PORCENTAJE: ${FINANZAS_RESERVA_PORCENTAJE:-0.30}
+      FINANZAS_MONEDA: ${FINANZAS_MONEDA:-COP}
+      FINANZAS_ADICIONAL_DECORACION_PREMIUM: ${FINANZAS_ADICIONAL_DECORACION_PREMIUM:-250000}
+      FINANZAS_ADICIONAL_HORA_EXTRA: ${FINANZAS_ADICIONAL_HORA_EXTRA:-120000}
+      FINANZAS_ADICIONAL_TRANSPORTE: ${FINANZAS_ADICIONAL_TRANSPORTE:-180000}
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8084/actuator/health || exit 1"]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  contratos-service:
+    <<: *servicio-base
+    build:
+      context: ./services/contratos-service
+    container_name: contratos_service
+    ports:
+      - "8085:8085"
+    environment:
+      <<: *env-base
+      SERVER_PORT: 8085
+      EVENTOS_SERVICE_URL: http://eventos-service:8081
+      CLIENTES_SERVICE_URL: http://clientes-service:8082
+      LUGARES_SERVICE_URL: http://lugares-service:8083
+      FINANZAS_SERVICE_URL: http://finanzas-service:8084
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8085/actuator/health || exit 1"]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  proveedores-service:
+    <<: *servicio-base
+    build:
+      context: ./services/proveedores-service
+    container_name: proveedores_service
+    ports:
+      - "8086:8086"
+    environment:
+      <<: *env-base
+      SERVER_PORT: 8086
+      EVENTOS_SERVICE_BASE_URL: http://eventos-service:8081
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8086/actuator/health || exit 1"]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  logistica-service:
+    <<: *servicio-base
+    build:
+      context: ./services/logistica-service
+    container_name: logistica_service
+    ports:
+      - "8088:8088"
+    environment:
+      <<: *env-base
+      SERVER_PORT: 8088
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8088/actuator/health || exit 1"]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  # Fase 5C: consumidores Kafka que solo persisten registros. Sin Redis (no lo usan; su health no depende de él).
+  auditoria-service:
+    <<: *servicio-base
+    build:
+      context: ./services/auditoria-service
+    container_name: auditoria_service
+    ports:
+      - "8087:8087"
+    environment:
+      <<: *env-base
+      SERVER_PORT: 8087
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8087/actuator/health || exit 1"]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  notificaciones-service:
+    <<: *servicio-base
+    build:
+      context: ./services/notificaciones-service
+    container_name: notificaciones_service
+    ports:
+      - "8089:8089"
+    environment:
+      <<: *env-base
+      SERVER_PORT: 8089
+      ZONA_HORARIA: ${ZONA_HORARIA:-America/Bogota}
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8089/actuator/health || exit 1"]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  # Fase 6: gateway GraphQL. Solo delega en los servicios REST (reenvía el header Authorization): sin BD, Redis ni Kafka.
+  # Fase 7: valida el JWT antes de llamar a nadie (salvo la mutation login) y aplica CORS.
+  # Sin depends_on hacia los microservicios (decisión de la Fase 1): si uno no responde, su campo da SERVICE_UNAVAILABLE.
+  gateway:
+    <<: *servicio-base
+    build:
+      context: ./gateway
+    container_name: gateway
+    ports:
+      - "8090:8090"
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx256m -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=48m -Xss512k -XX:+UseSerialGC"
+      SERVER_PORT: 8090
+      # dev = GraphiQL en http://localhost:8090/graphiql (vacío = apagado)
+      SPRING_PROFILES_ACTIVE: ${GATEWAY_SPRING_PROFILES:-}
+      # Fase 7: el gateway valida el JWT con la MISMA clave que los servicios (solo esta variable; no recibe las de la BD)
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?Definir AUTH_JWT_SECRET en .env}
+      # Orígenes del navegador que pueden llamar a /graphql (separados por comas; nunca "*")
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?Definir CORS_ALLOWED_ORIGINS en .env}
+      AUTH_SERVICE_URL: http://auth-service:8080
+      EVENTOS_SERVICE_URL: http://eventos-service:8081
+      CLIENTES_SERVICE_URL: http://clientes-service:8082
+      LUGARES_SERVICE_URL: http://lugares-service:8083
+      FINANZAS_SERVICE_URL: http://finanzas-service:8084
+      CONTRATOS_SERVICE_URL: http://contratos-service:8085
+      PROVEEDORES_SERVICE_URL: http://proveedores-service:8086
+      AUDITORIA_SERVICE_URL: http://auditoria-service:8087
+      LOGISTICA_SERVICE_URL: http://logistica-service:8088
+      NOTIFICACIONES_SERVICE_URL: http://notificaciones-service:8089
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8090/actuator/health || exit 1"]
+
+  # ------------------------------------------------------------------ interfaz (Fase 10C)
+  # React + Vite compilado en la imagen y servido por nginx en http://localhost:5173 (el origen de CORS_ALLOWED_ORIGINS).
+  # El navegador habla solo con el gateway: este contenedor no necesita la red de los servicios (va en la red por defecto).
+  frontend:
+    build:
+      context: ./frontend
+    container_name: frontend
+    restart: unless-stopped
+    mem_limit: 64m
+    # Sistema de archivos de solo lectura: nginx solo escribe en estos tmpfs (caché, pid y la configuración generada)
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+      - /etc/nginx/conf.d
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "5173:5173"
+    environment:
+      # URL del gateway que usará el NAVEGADOR (no la red interna). Se aplica al arrancar: /config.js y la CSP.
+      FRONTEND_GATEWAY_URL: ${FRONTEND_GATEWAY_URL:-http://localhost:8090}
+      # Fase 11H: zona de las horas de la interfaz (campanita), la misma ZONA_HORARIA de los servicios; va en /config.js
+      FRONTEND_ZONA_HORARIA: ${ZONA_HORARIA:-America/Bogota}
+      # Fase 11I: MODO DEMOSTRACIÓN opcional (AAAA-MM-DD). Vacía = fecha real. Solo la interfaz la usa como "hoy" (avisa en la
+      # barra); el backend sigue con su reloj real. Se aplica con `docker compose up -d frontend` (sin reconstruir).
+      FRONTEND_FECHA_SIMULADA: ${FRONTEND_FECHA_SIMULADA:-}
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5173/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  postgres_data:
+  redis_data:
+  kafka_data:
+
+networks:
+  maxi-eventos-net:
+    driver: bridge

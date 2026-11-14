@@ -1,0 +1,84 @@
+server:
+  port: ${SERVER_PORT:8085}
+
+spring:
+  # Mensajes de validación siempre en español, sin depender de la cabecera Accept-Language
+  web:
+    locale: es
+    locale-resolver: fixed
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  application:
+    name: contratos-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/maxi_eventos}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  sql:
+    init:
+      mode: always
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: contratos-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        "[spring.deserializer.value.delegate.class]": org.springframework.kafka.support.serializer.JsonDeserializer
+        "[spring.json.value.default.type]": com.maxieventos.contratos.kafka.MensajeKafka
+        "[spring.json.trusted.packages]": com.maxieventos.contratos.kafka
+        "[spring.json.use.type.headers]": false
+        # Fase 11E: refresca los metadatos (particiones nuevas de un tópico) cada 30 s en lugar de cada 5 minutos
+        "[metadata.max.age.ms]": 30000
+    listener:
+      ack-mode: record
+
+# Servicios de los que el contrato toma sus datos (el JWT de la petición se reenvía)
+servicios:
+  eventos:
+    url: ${EVENTOS_SERVICE_URL:http://localhost:8081}
+  clientes:
+    url: ${CLIENTES_SERVICE_URL:http://localhost:8082}
+  lugares:
+    url: ${LUGARES_SERVICE_URL:http://localhost:8083}
+  finanzas:
+    url: ${FINANZAS_SERVICE_URL:http://localhost:8084}
+  timeout:
+    conexion: 2s
+    lectura: 4s
+
+maxi-eventos:
+  # Zona horaria de las fechas y horas que se imprimen en el contrato y el anexo
+  zona-horaria: ${ZONA_HORARIA:America/Bogota}
+
+logging:
+  # Fase 11C: código de referencia de la petición (X-Request-Id; "-" en los consumidores Kafka y tareas programadas)
+  pattern:
+    correlation: "[ref=%X{ref:--}] "
+  level:
+    org.springframework.kafka: INFO
+
+auth:
+  jwt:
+    secret: ${AUTH_JWT_SECRET}
+    # Emisor que debe traer el token (lo pone auth-service); no es un secreto
+    issuer: maxi-eventos-auth
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized

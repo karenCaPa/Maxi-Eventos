@@ -1,0 +1,10 @@
+# Perfil dev: GraphiQL en http://localhost:8090/graphiql (activar con SPRING_PROFILES_ACTIVE=dev).
+# La introspección se habilita para que GraphiQL muestre el schema (Docs y autocompletado), pero exige token como
+# cualquier otra operación: login sin token → pegar el token en Headers → Re-fetch schema.
+spring:
+  graphql:
+    graphiql:
+      enabled: true
+    schema:
+      introspection:
+        enabled: true

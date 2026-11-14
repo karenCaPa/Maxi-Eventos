@@ -1,0 +1,48 @@
+# Secretos y configuración local
+.env
+.env.*
+!.env.example
+
+# Artefactos de compilación (Gradle)
+build/
+.gradle/
+out/
+bin/
+
+# Interfaz web (Node / Vite)
+node_modules/
+frontend/dist/
+
+# Logs y volcados de la JVM
+*.log
+hs_err_pid*.log
+replay_pid*.log
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+# La extensión de VS Code "app modernization" la vuelve a crear
+.github/modernize/
+
+# Sistema operativo
+Thumbs.db
+.DS_Store
+
+# Respaldos locales (deben estar fuera del proyecto; protección por si acaso)
+respaldos_maxi_eventos/
+
+# Volcados de base de datos (pueden tener datos reales).
+# Se conservan los esquemas de los servicios y los scripts de migración, que no tienen datos.
+*.sql
+!services/*/src/main/resources/schema.sql
+!docker/postgres/*.sql
+
+# Resultados de Newman (se generan al ejecutar la colección)
+postman/resultados/
+
+# Documentos de trabajo personales (no forman parte del entregable)
+PROGRESO.md
+PLAN_MAESTRO.md
+AUDITORIA.md
+INFORME_AUDITORIA_TECNICA.md

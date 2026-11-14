@@ -1,0 +1,75 @@
+server:
+  port: ${SERVER_PORT:8090}
+
+spring:
+  application:
+    name: gateway
+  # Sin usuarios en memoria: la autenticación es solo por JWT (igual que en los servicios)
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  graphql:
+    path: /graphql
+    # GraphiQL solo en el perfil dev (application-dev.yml); en el compose: GATEWAY_SPRING_PROFILES=dev
+    graphiql:
+      enabled: false
+    # La introspección (el schema completo) solo en dev y siempre con token; fuera de dev no se publica el schema
+    schema:
+      introspection:
+        enabled: false
+
+# Fase 7: el gateway valida el JWT (firma, vigencia y emisor) antes de llamar a ningún servicio, salvo la mutation login.
+auth:
+  jwt:
+    # La MISMA clave con la que firma Auth y validan los servicios (mínimo 32 caracteres); nunca en el código
+    secret: ${AUTH_JWT_SECRET}
+    issuer: maxi-eventos-auth
+
+# Orígenes del navegador que pueden llamar a /graphql, separados por comas. Nunca "*" (el gateway no arranca).
+# Vacío = ningún origen externo (solo GraphiQL, que es del mismo origen).
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+
+# Servicios REST en los que delega el gateway (el header Authorization de la petición GraphQL se reenvía)
+servicios:
+  auth:
+    url: ${AUTH_SERVICE_URL:http://localhost:8080}
+  eventos:
+    url: ${EVENTOS_SERVICE_URL:http://localhost:8081}
+  clientes:
+    url: ${CLIENTES_SERVICE_URL:http://localhost:8082}
+  lugares:
+    url: ${LUGARES_SERVICE_URL:http://localhost:8083}
+  finanzas:
+    url: ${FINANZAS_SERVICE_URL:http://localhost:8084}
+  contratos:
+    url: ${CONTRATOS_SERVICE_URL:http://localhost:8085}
+  proveedores:
+    url: ${PROVEEDORES_SERVICE_URL:http://localhost:8086}
+  auditoria:
+    url: ${AUDITORIA_SERVICE_URL:http://localhost:8087}
+  logistica:
+    url: ${LOGISTICA_SERVICE_URL:http://localhost:8088}
+  notificaciones:
+    url: ${NOTIFICACIONES_SERVICE_URL:http://localhost:8089}
+  # Los mismos timeouts que eventos-service
+  timeout:
+    conexion: 2s
+    lectura: 4s
+
+logging:
+  # Fase 11C: cada línea lleva el código de referencia de la petición (X-Request-Id; "-" fuera de una petición)
+  pattern:
+    correlation: "[ref=%X{ref:--}] "
+  level:
+    # Una línea por cada llamada REST: "REST -> <servicio> <MÉTODO> <ruta> <estado> (<ms> ms)"
+    "[maxieventos.rest]": INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true

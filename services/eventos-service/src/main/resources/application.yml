@@ -1,0 +1,89 @@
+spring:
+  # Mensajes de validación siempre en español, sin depender de la cabecera Accept-Language
+  web:
+    locale: es
+    locale-resolver: fixed
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  application:
+    name: eventos-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/maxi_eventos}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  sql:
+    init:
+      mode: always
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # El serializador JSON de los valores lo configura config/KafkaProducerConfig (fechas ISO, sin cabeceras de tipo);
+      # no se configura aquí: Spring Kafka no admite configurarlo por propiedades y por código a la vez.
+      properties:
+        # Si Kafka no responde, el envío (después del commit) falla en 5 s en lugar de bloquear 60 s la respuesta
+        "[max.block.ms]": 5000
+        "[delivery.timeout.ms]": 30000
+        "[request.timeout.ms]": 10000
+
+server:
+  port: ${SERVER_PORT:8081}
+
+maxi-eventos:
+  # "Hoy" para las reglas de fechas (los contenedores corren en UTC)
+  zona-horaria: ${ZONA_HORARIA:America/Bogota}
+  # Días en que la empresa trabaja: solo se registran eventos en ellos (regla de negocio). Nombres en inglés
+  # (MONDAY…SUNDAY) separados por comas. Por defecto, el fin de semana de la regla "un evento por fin de semana".
+  dias-permitidos: ${DIAS_PERMITIDOS:FRIDAY,SATURDAY,SUNDAY}
+  # Fase 11E: recordatorios EVENTO_PROXIMO de los eventos RESERVADOS (tópico eventos.proximos)
+  recordatorios:
+    # Días antes del evento en que se avisa (se envía el umbral más pequeño que aplique, una vez por evento y umbral)
+    dias: ${RECORDATORIOS_DIAS:7,1}
+    # Horario de la revisión (cron de Spring: segundo minuto hora día mes día-semana) en la zona de zona-horaria.
+    # "-" la desactiva: solo queda la ejecución manual (POST /api/v1/recordatorios/ejecutar). Para la sustentación: "-".
+    cron: ${RECORDATORIOS_CRON:0 0 7 * * *}
+  # Outbox de los mensajes Kafka: reenvío periódico de lo que siga PENDIENTE
+  outbox:
+    intervalo-ms: 15000        # cada cuánto se revisan los pendientes
+    retraso-inicial-ms: 20000  # primera revisión tras el arranque
+    espera-minima: PT30S       # antigüedad mínima de una fila PENDIENTE para reenviarla (da tiempo al envío inmediato)
+    envio-atascado: PT2M       # una fila ENVIANDO sin confirmación tras este tiempo se vuelve a enviar
+    lote: 50
+
+# Servicios que consulta eventos-service (el JWT de la petición se reenvía)
+servicios:
+  clientes:
+    url: ${CLIENTES_SERVICE_URL:http://localhost:8082}
+  lugares:
+    url: ${LUGARES_SERVICE_URL:http://localhost:8083}
+  contratos:
+    url: ${CONTRATOS_SERVICE_URL:http://localhost:8085}
+  finanzas:
+    url: ${FINANZAS_SERVICE_URL:http://localhost:8084}
+  timeout:
+    conexion: 2s
+    lectura: 4s
+auth:
+  jwt:
+    secret: ${AUTH_JWT_SECRET}
+    # Emisor que debe traer el token (lo pone auth-service); no es un secreto
+    issuer: maxi-eventos-auth
+logging:
+  # Fase 11C: código de referencia de la petición (X-Request-Id; "-" en el reenvío del outbox y otras tareas programadas)
+  pattern:
+    correlation: "[ref=%X{ref:--}] "
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized

@@ -1,0 +1,67 @@
+spring:
+  # Mensajes de validación siempre en español, sin depender de la cabecera Accept-Language
+  web:
+    locale: es
+    locale-resolver: fixed
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  application:
+    name: lugares-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/maxi_eventos}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  sql:
+    init:
+      mode: always
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD}
+      # Si Redis no responde, se espera como máximo 2 s antes de consultar la base de datos
+      timeout: 2s
+      connect-timeout: 2s
+  cache:
+    type: redis
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+server:
+  port: ${SERVER_PORT:8083}
+maxi-eventos:
+  cache:
+    ttl:
+      lugares: ${CACHE_TTL_LUGARES:PT30M}
+      lugares-listado: ${CACHE_TTL_LUGARES_LISTADO:PT30M}
+logging:
+  # Fase 11C: código de referencia de la petición (X-Request-Id; "-" fuera de una petición)
+  pattern:
+    correlation: "[ref=%X{ref:--}] "
+  level:
+    # HIT / MISS / PUT / EVICT de la caché Redis (subir a WARN para ocultarlos)
+    "[maxieventos.cache]": INFO
+auth:
+  jwt:
+    secret: ${AUTH_JWT_SECRET}
+    # Emisor que debe traer el token (lo pone auth-service); no es un secreto
+    issuer: maxi-eventos-auth
+management:
+  # Redis es solo una caché con respaldo (CacheErrorHandlerConRegistro consulta la base de datos si falla):
+  # su caída no debe dejar el servicio DOWN, así que no forma parte del health.
+  health:
+    redis:
+      enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized
