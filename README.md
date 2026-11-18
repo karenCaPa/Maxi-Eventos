@@ -17,6 +17,22 @@ documentado con OpenAPI, expuesto al cliente a través de un gateway GraphQL) y 
 posteriores e independientes: logística, contratos, notificaciones y auditoría reaccionan a un hecho sin que el servicio
 que lo originó tenga que ejecutarlos ni esperar por ellos).
 
+## Integrantes y versión entregada
+
+| Dato | Detalle |
+|---|---|
+| Proyecto | Plataforma de Gestión de Eventos para Maxi Eventos |
+| Institución y programa | Fundación Escuela Tecnológica (FET), Ingeniería de Software |
+| Curso | Programación Avanzada (proyecto de aula) |
+| Docente tutor | Diego Fernando Vargas Ramirez |
+| Integrantes | Xing Ying Lin · Karen Sofia Camacho Paredes · Juan Pablo Mejia Rodríguez |
+| Repositorio | https://github.com/karenCaPa/Maxi-Eventos (único repositorio de la solución) |
+| Versión entregada | Etiqueta (tag) y release **`v1.0.0`** (el commit exacto se ve en la página del release de GitHub) |
+| Fecha de la entrega | Noviembre de 2026 |
+
+Todo el código de la solución (frontend, gateway y los 10 microservicios) está en este único repositorio; no hay
+repositorios adicionales. El ZIP de la entrega se generó desde ese mismo tag.
+
 | Documento | Contenido |
 |---|---|
 | [`docs/arquitectura.md`](docs/arquitectura.md) | Diagrama, servicios, comunicación síncrona y asíncrona |
@@ -26,7 +42,9 @@ que lo originó tenga que ejecutarlos ni esperar por ellos).
 | [`docs/seguridad.md`](docs/seguridad.md) | JWT, público y protegido, CORS, secretos, token y CSP de la interfaz |
 | [`docs/frontend.md`](docs/frontend.md) | Interfaz web: pantallas, calendario, estructura, Docker (nginx, `FRONTEND_GATEWAY_URL`) y pruebas |
 | [`docs/evidencias.md`](docs/evidencias.md) | Índice de las guías de capturas de cada entrega |
-| [`openapi/`](openapi/) | Contratos OpenAPI de los 10 servicios (coinciden con el código) |
+| [`docs/matriz-pruebas.md`](docs/matriz-pruebas.md) | Matriz de pruebas: caso, resultado esperado, obtenido, estado y evidencia; qué es medido, simulado y futuro |
+| [`docs/evidencias-final.md`](docs/evidencias-final.md) | Las 30 capturas de la entrega final (carpeta [`docs/evidencias/`](docs/evidencias/)) |
+| [`openapi/`](openapi/) | 11 contratos OpenAPI: los 10 servicios (coinciden con el código) y la descarga de documentos del gateway |
 | [`postman/`](postman/) | Colección y environment de Postman (277 peticiones, 763 pruebas) |
 | [`scripts/verificacion/`](scripts/verificacion/) | Scripts de PowerShell: datos de demostración, pruebas, verificaciones |
 
@@ -326,6 +344,29 @@ docker compose exec redis sh -c 'export REDISCLI_AUTH="$REDIS_PASSWORD"; redis-c
 Marcados con `# TODO valor real` / `# TODO regla real` en la configuración: las **tarifas** de cotización y si el cupo de
 invitados incluidos es **único o separado** (adultos/niños; `FINANZAS_MODO_CUPO`), el **porcentaje de reserva** (30 %) y la
 regla del **recálculo de logística** por adicionales (`transporte-adicional` = +1 camión por unidad).
+
+### Limitaciones de esta versión
+
+Lo que **no** está implementado o es una simulación (la clasificación completa está en
+[`docs/matriz-pruebas.md`](docs/matriz-pruebas.md)):
+
+- **Notificaciones simuladas:** se guardan y se muestran en la campanita; no se envían correos reales.
+- **Una sola base PostgreSQL** compartida, con tablas separadas por servicio (no una base por servicio).
+- **Sin circuit breaker:** si un servicio no responde, el gateway devuelve el error del campo (503 o `SERVICE_UNAVAILABLE`).
+- **Sin TLS ni HTTPS** y con los puertos 8080–8089 abiertos para Swagger y Postman (en producción solo el gateway).
+- **Ejecución solo local** con Docker Compose y **datos ficticios**; no hay despliegue real.
+- **Tarifas, porcentaje de reserva y regla de logística por adicionales** son valores de ejemplo, pendientes de confirmar con la
+  organizadora (marcados `# TODO valor real`).
+- **Cotización pendiente que no continúa:** el sistema no la vence ni libera la fecha por sí solo; la organizadora debe
+  cancelar el evento manualmente.
+- **Entrega de mensajes al menos una vez:** el efecto de cada mensaje es único gracias a la idempotencia.
+- **Campanita por consulta periódica** (cada 30 s), no en tiempo real (SSE y WebSocket quedaron fuera por JWT, nginx y CSP).
+- **Sin validación con la empresa:** es un proyecto de aula; la plataforma se probó con datos de demostración.
+- **Dependencias externas:** Docker Desktop (con WSL 2), JDK 21 solo para compilar fuera de Docker, Node.js ≥ 22.13 solo para la
+  interfaz fuera de Docker, Windows PowerShell 5.1 para los scripts y Edge o Chrome para el recorrido de `verificar_10.ps1`.
+
+Trabajo futuro: circuit breaker, una base por servicio, correo real, tiempo real para la campanita, despliegue con HTTPS y
+respaldos, vencimiento automático de cotizaciones pendientes.
 
 ### Fuera del alcance (para producción)
 

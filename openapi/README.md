@@ -1,6 +1,6 @@
 # Contratos OpenAPI
 
-Única fuente de los contratos REST de Maxi Eventos (OpenAPI 3.0.3). Un archivo por microservicio:
+Única fuente de los contratos REST de Maxi Eventos (OpenAPI 3.0.3). Un archivo por microservicio, más el de las descargas del gateway:
 
 | Archivo | Servicio | Puerto local |
 |---|---|---|
@@ -14,13 +14,14 @@
 | `auditoria.yaml` | auditoria-service | 8087 |
 | `logistica.yaml` | logistica-service | 8088 |
 | `notificaciones.yaml` | notificaciones-service | 8089 |
+| `gateway-documentos.yaml` | gateway (descarga de los PDF del contrato y del anexo) | 8090 |
 
 Cada servicio expone además su documentación generada por Springdoc en
 `http://localhost:<puerto>/swagger-ui.html`.
 
 ## Estado (Fase 9B)
 
-Los 10 contratos están alineados con el código: `scripts\verificacion\comparar-openapi.ps1` los compara con el
+Los 10 contratos de los servicios están alineados con el código (el de las descargas del gateway documenta sus 2 rutas de solo lectura): `scripts\verificacion\comparar-openapi.ps1` los compara con el
 `/v3/api-docs` de cada servicio en marcha y da **0 diferencias reales y 0 reglas incumplidas**.
 
 - Seguridad `bearerAuth` (JWT) en todas las operaciones salvo `POST /auth/login`; **401** documentado en todas las protegidas.
