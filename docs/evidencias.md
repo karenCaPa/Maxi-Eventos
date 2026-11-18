@@ -8,6 +8,7 @@ pantalla) y **qué debe verse**:
 | P2 · Entrega 1 (semanas 7 y 8) | [`evidencias-p2e1.md`](evidencias-p2e1.md) | API REST, persistencia, validaciones y errores, OpenAPI, Postman, pruebas, Docker Compose, reto de la semana 8, caché Redis |
 | P2 · Entrega 2 (semana 11) | [`evidencias-p2e2.md`](evidencias-p2e2.md) | Kafka: tópicos, productor con outbox, consumidores, idempotencia, DLT, logs |
 | P3 · Entrega 1 (semana 13) | [`evidencias-p3e1-graphql.md`](evidencias-p3e1-graphql.md) | Gateway GraphQL, queries y mutations, errores, seguridad (JWT, CORS) |
+| Entrega final | [`evidencias-final.md`](evidencias-final.md) | Las 30 capturas de la entrega final: arquitectura, pruebas, interfaz, Kafka, campanita, errores con referencia, móvil y prueba de Kafka detenido. Resultados en [`matriz-pruebas.md`](matriz-pruebas.md) |
 
 Para la presentación en vivo: [`sustentacion.md`](sustentacion.md).
 
